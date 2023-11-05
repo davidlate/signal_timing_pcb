@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP QV6012LH4TP
+D 12 A High Temperature Alternistor Triac
+K
+F https://www.littelfuse.com/media?resourcetype=datasheets&itemid=b3cd379e-1c95-41fd-986c-ece0e263c0a6&filename=littelfuse-thyristor-qvxx12xhx-datasheet
+$ENDCMP
+#
+#End Doc Library
