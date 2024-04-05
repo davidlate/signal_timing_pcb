@@ -31,13 +31,13 @@ int audioPulseWidthMicros = 10*1000;       //Number of microseconds audio should
 int audioEndPreTENSDelayMicros  = 6*1000; //Number of microseconds prior to receiving electrical stim when audio should stop
 int audioStartPreTENSMicros = audioPulseWidthMicros + audioEndPreTENSDelayMicros;  //Number of milliseconds prior to receiving electrical stim when audio should start
 
-int treatmentFrequencyHz = 5;
-float treatmentPeriodMillis = 1000/5;
-int treatmentPeriodMicros = treatmentPeriodMillis*1000;
+int bimodalFrequencyHz = 5;
+float bimodalPeriodMillis = 1000/5;
+int bimodalPeriodMicros = bimodalPeriodMillis*1000;
 int numCyclesBetweenBimodals;
 volatile int actualTimeBetweenBimodals;
 int prevNTotalPulses;
-volatile int numCyclesUntilNextTreatment;
+volatile int numCyclesUntilNextbimodal;
 bool setup_func = false;
 int actualAudioOnTimeMicros;
 int actualAudioOffTimeMicros;
@@ -87,10 +87,10 @@ void loop() {
 
   if (nTotalPulses >= 10 && setup_func == false) {    //Sets up the sync between the TENS unit and the RaspPi Pico
     averagePulsePeriodMicros = first1SecondSync();    //Runs the first sync
-    numCyclesBetweenBimodals = (treatmentPeriodMicros / averagePulsePeriodMicros); //Calculates the required number of cycles to roughly match the desired treatment schedule
+    numCyclesBetweenBimodals = (bimodalPeriodMicros / averagePulsePeriodMicros); //Calculates the required number of cycles to roughly match the desired bimodal schedule
     actualTimeBetweenBimodals = numCyclesBetweenBimodals * averagePulsePeriodMicros;  //Converts the number of cycles value to an actual time value that can be used to predict TENS pulses.
-    Serial.print("Treatment Period Millis: ");
-    Serial.print(treatmentPeriodMicros/1000);
+    Serial.print("bimodal Period Millis: ");
+    Serial.print(bimodalPeriodMicros/1000);
     Serial.print("ms\nAveragePulsePeriodMicros: ");
     Serial.print(averagePulsePeriodMicros);
     Serial.print("us\nNum Cycles Between Bimodals: ");
@@ -107,7 +107,7 @@ void loop() {
   frequency_Hz = 1.0000 / (period_micros/1000000);                      //frequency in Hz
   //Serial.print("Here");
 
-  if (nTotalPulses > prevNTotalPulses && nTotalPulses >=10){                      //This freezes the program upon a treatment pulse, and waits for the next anticipated TENS pulse
+  if (nTotalPulses > prevNTotalPulses && nTotalPulses >=10){                      //This freezes the program upon a bimodal pulse, and waits for the next anticipated TENS pulse
     prevNTotalPulses = nTotalPulses;                          //Resets the gate for whether this if statement is entered.  This will be updated later on after the TENS pulse is recorded by the ISR
     timeToStartNextAudioMicros = readTime_micros + actualTimeBetweenBimodals - audioStartPreTENSMicros;   //Calculates the proper time to start the next Audio segment.
     
@@ -120,7 +120,7 @@ void loop() {
     // Serial.print((readTime_micros)/1000.00);         
     // Serial.print("ms\n");
 
-    // Serial.print("Inside treatment function\nTime to start next audio in millis:");
+    // Serial.print("Inside bimodal function\nTime to start next audio in millis:");
     // Serial.print((timeToStartNextAudioMicros)/1000.00);    //Time to start next audio is calculating a time earlier than the current time.
     
     // Serial.print("ms\nLast Pulse time: ");
