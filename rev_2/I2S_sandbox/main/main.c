@@ -111,9 +111,9 @@ static void i2s_write_function(void *waveform)
     This function returns the number of bytes written to the I2S buffer to the wbytes variable.
     When the buffer is almost full, wbytes will be less than I2S BUFF SIZE, because there is not enough space to write the
     entire data length.  We exit the loop at that point.  This would be more useful if len(wbuf) > I2S BUFF Size, and is not necessary here*/
-    // while (w_bytes == I2S_BUFF_SIZE) {
-    //     ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes));
-    // }
+    while (w_bytes == I2S_BUFF_SIZE) {
+        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes));
+    }
 
     /*Here, we initialize our time-tracking and index-tracking variables*/
     float start_time_us = (float)esp_timer_get_time();
@@ -153,7 +153,7 @@ static void i2s_write_function(void *waveform)
         ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes));
         }
 
-        vTaskDelay(pdMS_TO_TICKS(200));                      //This delay was found empirically to be required to enable a 5Hz frequency.
+        vTaskDelay(pdMS_TO_TICKS(170));                      //This delay was found empirically to be required to enable a 5Hz frequency.
         idx++;
 
     }
