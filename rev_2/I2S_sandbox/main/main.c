@@ -191,7 +191,7 @@ static void i2s_example_init_std_simplex(void)
         .role = I2S_ROLE_MASTER,
         .dma_desc_num = NUM_DMA_BUFF,
         .dma_frame_num = SIZE_DMA_BUFF,
-        .auto_clear_after_cb = true,
+        .auto_clear_before_cb = true,
     }
 
     ESP_ERROR_CHECK(i2s_new_channel(&tx_chan_cfg, &tx_chan, NULL));
