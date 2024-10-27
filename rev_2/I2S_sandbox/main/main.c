@@ -64,21 +64,7 @@ int FREQUENCY          = 1000;
 
 
 void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENCY) {
-    // Calculate the number of samples
-    printf("Free heap size before allocation: %lu bytes\n", esp_get_free_heap_size());
 
-    printf("Num Samples: %d\n", WAVEFORM_LEN);
-    printf("Size of double: %u\n", sizeof(double));
-
-    // Allocate memory for the waveform array
-    // int32_t *waveform = (int32_t *)malloc(WAVEFORM_LEN * sizeof(int32_t));
-    printf("Free heap size after allocation: %lu bytes\n", esp_get_free_heap_size());
-
-    // Check if memory allocation was successful
-    if (waveform == NULL) {
-        printf("Memory allocation failed!\n");
-        // return NULL;  // Return NULL if allocation failed
-    }
 
     // Populate the waveform array with sine values
     for (int i = 0; i < WAVEFORM_LEN; i++) {
@@ -90,72 +76,81 @@ void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENC
         (waveform_double[i]) = sine_point;
         (waveform[i]) = int_point;
     }
+
+
     printf("Made it through sine wave function\n");
 
 }
 
 
-static void i2s_example_write_task(void *waveform)
+static void i2s_write_function(void *waveform)
 {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    // esp_task_wdt_add(xTaskGetCurrentTaskHandle());
-    int32_t *audio_waveform = (int32_t*)waveform;
-    
-    int32_t *w_buf = (int32_t *)calloc(1, I2S_BUFF_SIZE);
-    int32_t *zero_buf = (int32_t *)calloc(1, I2S_BUFF_SIZE);
+    int32_t *audio_waveform = (int32_t*)waveform;           //Cast the waveform argumen to a 32-bit int pointer
 
-    assert(w_buf); // Check if w_buf allocation success
-    size_t w_bytes = I2S_BUFF_SIZE;
-    size_t zero_bytes = I2S_BUFF_SIZE;
+    int32_t *w_buf = (int32_t *)calloc(1, I2S_BUFF_SIZE);   //Allocate memory for the I2S write buffer
+    assert(w_buf);                                          //Check if buffer was allocated successfully
+    size_t w_bytes = I2S_BUFF_SIZE;                         //Create variable to track how many bytes are written to the I2S DMA buffer
+    size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
 
 
-    size_t audio_samples_pos = 0; // Keep track of where we are in the audio data
-
-    size_t bytes_written = 0;
-
-    /* (Optional) Preload the data before enabling the TX channel, so that the valid data can be transmitted immediately */
-    // while (w_bytes == I2S_BUFF_SIZE) {
-    //     /* Here we load the target buffer repeatedly, until all the DMA buffers are preloaded */
-    //     ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes));
-    // }
-
-    /* Enable the TX channel */
-    ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
-
+    /*Here we iterate through each index in the audio waveform, and assign the value to the wbuf*/
     while (audio_samples_pos<WAVEFORM_LEN) {
         w_buf[audio_samples_pos] = (audio_waveform[audio_samples_pos]);
         audio_samples_pos++;
-        // printf("audio_samples_pos: %i\n audio_waveform[audio_samples_pos]: %ld\n", audio_samples_pos,audio_waveform[audio_samples_pos]);
         }
 
-    for (int i = 0; i < I2S_BUFF_SIZE; i++) {
-        zero_buf[i] = 0;
-        }
-    int64_t start_time = esp_timer_get_time();
-    int32_t start_time_ms  = start_time / 1000;
-    printf("Time Of Loop Start: %ld ms", start_time_ms);
-    int64_t curr_time;
-    int32_t curr_time_ms = start_time_ms;
-    float curr_time_s;
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    /* Here we load the target buffer repeatedly, until all the DMA buffers are preloaded 
+    This function returns the number of bytes written to the I2S buffer to the wbytes variable.
+    When the buffer is almost full, wbytes will be less than I2S BUFF SIZE, because there is not enough space to write the
+    entire data length.  We exit the loop at that point.  This would be more useful if len(wbuf) > I2S BUFF Size, and is not necessary here*/
+    while (w_bytes == I2S_BUFF_SIZE) {
+        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes));
+    }
+
+    /*Here, we initialize our time-tracking and index-tracking variables*/
+    float start_time_us = (float)esp_timer_get_time();
+    printf("Time Of Loop Start: %0.6f ms", start_time_us/(float)1000);
+    float curr_time_us = start_time_us;
+    float last_time_us = curr_time_us;
+    float period_us    = 0;
     int idx = 0;
 
-    while(idx < 40){
+    /*This begins the sound-writing loop, which is limited to 300 iterations for testing purposes*/
+    while(idx < 300){           
+        
+        /*The I2S channel is enabled and disabled every loop.  This has been found to enable the most repeatable results*/
+        ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));       
 
-        printf("idx: %i", idx);
+        /*Find current time and period of last loop*/
+        curr_time_us = (float)(esp_timer_get_time()) - start_time_us;   
+        period_us = curr_time_us - last_time_us;
+        last_time_us = curr_time_us;
 
+        /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
+        we would use the wbytes variable to move along wbuf and start a new write at the position where the 
+        last one left off.  That's not the case here, though*/
         for (int tot_bytes = 0; tot_bytes < WAVEFORM_LEN * sizeof(int32_t); tot_bytes += w_bytes){
-            curr_time_ms = (int32_t)(esp_timer_get_time())/(int32_t)1000 - start_time_ms;
-            i2s_channel_write(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes, DURATION_MS*2);
-            printf("\n\nCurrent Loop Period: %ld ms\n", curr_time_ms);
+
+            i2s_channel_write(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes, DURATION_MS);
+
         };
 
-        vTaskDelay(pdMS_TO_TICKS(200));
+        printf("Current Loop Time: %0.1f ms\n", curr_time_us/1000);
+        printf("Current Loop Period: %0.6f ms\n", period_us/1000);
+
+        ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));      //Disable channel each loop, as described above
+        
+        w_bytes = I2S_BUFF_SIZE;
+        while (w_bytes == I2S_BUFF_SIZE) {                  //Optionally pre-load buffer for next loop.
+        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes));
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(90));                      //This delay was found empirically to be required to enable a 5Hz frequency.
         idx++;
 
     }
 
-    
+
     // free(w_buf);
     
     // vTaskDelete(NULL);
@@ -179,7 +174,7 @@ static void i2s_channel_setup(void)
         .dma_frame_num = SIZE_DMA_BUFF,
         .auto_clear_before_cb = true,
     }
-
+        
     ESP_ERROR_CHECK(i2s_new_channel(&tx_chan_cfg, &tx_chan, NULL));
 
     /* Step 2: Setting the configurations of standard mode and initialize each channels one by one
@@ -248,7 +243,7 @@ void app_main(void)
 
     // xTaskCreate(i2s_example_write_task, "i2s_example_write_task", 65536, wave, 5, NULL);
 
-    i2s_example_write_task(wave);        //wave is the pointer to the array which contains the sine wave
+    i2s_write_function(wave);        //wave is the pointer to the array which contains the sine wave
 
     while(1){
         if (esp_task_wdt_reset()==ESP_OK){   //Feed the watchdog timer using esp_task_wdt_reset()
