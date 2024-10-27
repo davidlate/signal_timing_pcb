@@ -44,8 +44,8 @@ the BCLK and WS signal
 #define BITS_IN_32BIT               2147483647
 #define VOL_PERCENT                 10
 
-#define SAMPLE_RATE                 16000
-#define DURATION_MS                 100
+#define SAMPLE_RATE                 160000
+#define DURATION_MS                 30
 #define WAVEFORM_LEN                SAMPLE_RATE/1000*DURATION_MS
 #define NUM_DMA_BUFF                8
 #define SIZE_DMA_BUFF               1023
@@ -64,6 +64,7 @@ int FREQUENCY          = 1000;
 
 
 void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENCY) {
+    printf("WAVEFORM LEN: %i\n", WAVEFORM_LEN);
 
 
     // Populate the waveform array with sine values
@@ -71,9 +72,10 @@ void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENC
         double timestep = (double)i / (double)SAMPLE_RATE;
         double volume = (double)VOL_PERCENT / (double)100;                  //Operands must be cast to double for this to work.
         // printf("Volume: %0.10f\n", volume);
-        double sine_point = (volume * sin(2 * M_PI * FREQUENCY * timestep));  // Use 2 * PI for full sine wave cycle
+        double sine_point = volume * sin(2 * M_PI * FREQUENCY * timestep);  // Use 2 * PI for full sine wave cycle
         int32_t int_point = (int32_t)(sine_point*BITS_IN_32BIT);
-        (waveform_double[i]) = sine_point;
+        waveform_double[i] = sine_point;
+
         (waveform[i]) = int_point;
     }
 
@@ -84,10 +86,16 @@ void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENC
 
 
 static void i2s_write_function(void *waveform)
-{
-    int32_t *audio_waveform = (int32_t*)waveform;           //Cast the waveform argumen to a 32-bit int pointer
+{    
+    printf("\n5\n");
 
-    int32_t *w_buf = (int32_t *)calloc(1, I2S_BUFF_SIZE);   //Allocate memory for the I2S write buffer
+    int32_t *audio_waveform = (int32_t*)waveform;           //Cast the waveform argumen to a 32-bit int pointer
+    printf("\n6\n");
+
+    size_t WAVEFORM_SIZE = (int32_t)WAVEFORM_LEN * sizeof(int32_t);
+    printf("Here");
+
+    int32_t *w_buf = (int32_t *)calloc(sizeof(int32_t), WAVEFORM_LEN);   //Allocate memory for the I2S write buffer
     assert(w_buf);                                          //Check if buffer was allocated successfully
     size_t w_bytes = I2S_BUFF_SIZE;                         //Create variable to track how many bytes are written to the I2S DMA buffer
     size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
@@ -103,9 +111,9 @@ static void i2s_write_function(void *waveform)
     This function returns the number of bytes written to the I2S buffer to the wbytes variable.
     When the buffer is almost full, wbytes will be less than I2S BUFF SIZE, because there is not enough space to write the
     entire data length.  We exit the loop at that point.  This would be more useful if len(wbuf) > I2S BUFF Size, and is not necessary here*/
-    while (w_bytes == I2S_BUFF_SIZE) {
-        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes));
-    }
+    // while (w_bytes == I2S_BUFF_SIZE) {
+    //     ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes));
+    // }
 
     /*Here, we initialize our time-tracking and index-tracking variables*/
     float start_time_us = (float)esp_timer_get_time();
@@ -129,9 +137,9 @@ static void i2s_write_function(void *waveform)
         /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
         we would use the wbytes variable to move along wbuf and start a new write at the position where the 
         last one left off.  That's not the case here, though*/
-        for (int tot_bytes = 0; tot_bytes < WAVEFORM_LEN * sizeof(int32_t); tot_bytes += w_bytes){
+        for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
 
-            i2s_channel_write(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes, DURATION_MS);
+            i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
 
         };
 
@@ -142,10 +150,10 @@ static void i2s_write_function(void *waveform)
         
         w_bytes = I2S_BUFF_SIZE;
         while (w_bytes == I2S_BUFF_SIZE) {                  //Optionally pre-load buffer for next loop.
-        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, I2S_BUFF_SIZE, &w_bytes));
+        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes));
         }
 
-        vTaskDelay(pdMS_TO_TICKS(90));                      //This delay was found empirically to be required to enable a 5Hz frequency.
+        vTaskDelay(pdMS_TO_TICKS(200));                      //This delay was found empirically to be required to enable a 5Hz frequency.
         idx++;
 
     }
@@ -230,14 +238,19 @@ void app_main(void)
                                                         //more frequently than the "timeout_ms" amount of time
 
 
+    printf("\n1\n");
 
-    int32_t * wave = calloc (1, sizeof(int32_t)*(int32_t)WAVEFORM_LEN);
-    double * wave_double = calloc(1, sizeof(double)*(int32_t)WAVEFORM_LEN);
+    int32_t *wave = calloc(WAVEFORM_LEN, sizeof(int32_t));
+    double *wave_double = calloc(WAVEFORM_LEN, sizeof(double));
     // Create the sine wave
+    printf("\n2\n");
+
     create_sine_wave(wave, wave_double, FREQUENCY);
+    printf("\n3\n");
 
 
     i2s_channel_setup();
+    printf("\n4\n");
 
     /* Step 3: Create writing and reading task, enable and start the channels */
 
