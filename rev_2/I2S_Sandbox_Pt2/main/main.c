@@ -48,7 +48,7 @@ the BCLK and WS signal
 #define VOL_PERCENT                 10
 
 #define SAMPLE_RATE                 44100
-#define DURATION_MS                 50
+#define DURATION_MS                 20
 #define WAVEFORM_LEN                SAMPLE_RATE/1000*DURATION_MS
 #define NUM_DMA_BUFF                8
 #define SIZE_DMA_BUFF               1023
@@ -144,9 +144,7 @@ static void i2s_write_function(void *waveform)
     we would use the wbytes variable to move along wbuf and start a new write at the position where the 
     last one left off.  That's not the case here, though*/
     for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
-
         i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
-
     };
 
 
@@ -155,7 +153,7 @@ static void i2s_write_function(void *waveform)
     printf("Current Loop Period: %0.6f ms\n", period_us/1000);
 
     ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));      //Disable channel each loop, as described above
-    
+
     idx++;
 
 
@@ -477,15 +475,17 @@ void app_main(void)
     i2s_channel_setup();
 
     //I2S Main Function______________________________________________________I2S MAIN END________________________________RMT MAIN END______________________
+    gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
 
+    gpio_set_level(GPIO_NUM_17, 1);
 
 
     while (1) {
         
-
         i2s_write_function(wave);
-        // vTaskDelay(pdMS_TO_TICKS(20));
+    gpio_set_level(GPIO_NUM_17, 0);
 
+        // vTaskDelay(pdMS_TO_TICKS(20));
         //Write to the RMT channel for it to begin writing the desired sequence.
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
@@ -497,6 +497,7 @@ void app_main(void)
 
 
         vTaskDelay(pdMS_TO_TICKS(750));
+
 
     }
 }
