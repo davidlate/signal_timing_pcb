@@ -47,7 +47,7 @@ the BCLK and WS signal
 #define BITS_IN_32BIT               2147483647
 #define VOL_PERCENT                 10
 
-#define SAMPLE_RATE                 16000
+#define SAMPLE_RATE                 44100
 #define DURATION_MS                 50
 #define WAVEFORM_LEN                SAMPLE_RATE/1000*DURATION_MS
 #define NUM_DMA_BUFF                8
@@ -126,32 +126,37 @@ static void i2s_write_function(void *waveform)
     float period_us    = 0;
     int idx = 0;
 
+
+    ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));      //Disable channel each loop, as described above
+
     /*This begins the sound-writing loop, which is limited to 300 iterations for testing purposes*/
     // while(idx < 300){           
 
         /*The I2S channel is enabled and disabled every loop.  This has been found to enable the most repeatable results*/
-        ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));       
+    // ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));       
 
-        /*Find current time and period of last loop*/
-        curr_time_us = (float)(esp_timer_get_time()) - start_time_us;   
-        period_us = curr_time_us - last_time_us;
-        last_time_us = curr_time_us;
+    /*Find current time and period of last loop*/
+    curr_time_us = (float)(esp_timer_get_time()) - start_time_us;   
+    period_us = curr_time_us - last_time_us;
+    last_time_us = curr_time_us;
 
-        /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
-        we would use the wbytes variable to move along wbuf and start a new write at the position where the 
-        last one left off.  That's not the case here, though*/
-        for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
+    /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
+    we would use the wbytes variable to move along wbuf and start a new write at the position where the 
+    last one left off.  That's not the case here, though*/
+    for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
 
-            i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
+        i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
 
-        };
+    };
 
-        printf("Current Loop Time: %0.1f ms\n", curr_time_us/1000);
-        printf("Current Loop Period: %0.6f ms\n", period_us/1000);
 
-        ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));      //Disable channel each loop, as described above
-        
-        idx++;
+
+    printf("Current Loop Time: %0.1f ms\n", curr_time_us/1000);
+    printf("Current Loop Period: %0.6f ms\n", period_us/1000);
+
+    ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));      //Disable channel each loop, as described above
+    
+    idx++;
 
 
     free(w_buf);
@@ -477,12 +482,14 @@ void app_main(void)
 
     while (1) {
         
+
         i2s_write_function(wave);
         // vTaskDelay(pdMS_TO_TICKS(20));
 
         //Write to the RMT channel for it to begin writing the desired sequence.
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
+
 
         //Wait for the RMT channel to finish writing.
         // ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_A_chan, portMAX_DELAY));
