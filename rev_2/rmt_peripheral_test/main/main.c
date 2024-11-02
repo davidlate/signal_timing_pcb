@@ -6,8 +6,8 @@
 #include "driver/rmt_tx.h"
 
 #define RMT_RESOLUTION_HZ 10000000              //10MHz resolution, 1 tick = 0.1us (led strip needs a high resolution)
-#define RMT_TENS_PHASE_A_GPIO_NUM      2
-#define RMT_TENS_PHASE_B_GPIO_NUM      4
+#define RMT_TENS_PHASE_A_GPIO_NUM      4
+#define RMT_TENS_PHASE_B_GPIO_NUM      5
 
 #define FRAME_DURATION_MS   10
 
@@ -42,10 +42,10 @@ static const rmt_symbol_word_t TENS_pulse_high = {  //This sends a TENS pulse
     .level1 = 0,
     .duration1 = TENS_INTERPHASE_DEADTIME_US * RMT_RESOLUTION_HZ / 1000000,  //0.5 us
 };
-
+    //Added 21.5us trim feature to calibrate offset
 static const rmt_symbol_word_t TENS_pulse_low = {   //This is a timeholder to keep the current TENS phase low for the same duration that the other fires
     .level0 = 0,
-    .duration0 = TENS_PULSE_WIDTH_US * RMT_RESOLUTION_HZ / 1000000, //150 us
+    .duration0 = ((TENS_PULSE_WIDTH_US-21.5) * RMT_RESOLUTION_HZ )/ 1000000, //150 us
     .level1 = 0,
     .duration1 = TENS_INTERPHASE_DEADTIME_US * RMT_RESOLUTION_HZ / 1000000, //0.5 us
 };
@@ -109,14 +109,13 @@ void app_main(void)
     //Initialize the rmt channels with null values.  An actual handle can be returned from rmt_new_tx_channel later
     rmt_channel_handle_t tens_phase_A_chan = NULL;
     rmt_channel_handle_t tens_phase_B_chan = NULL;      
-    rmt_channel_handle_t tens_channels[2] = {NULL};  
 
 
     //Create a struct to configure the rmt channel
     rmt_tx_channel_config_t tens_phase_A_chan_config = {
         .clk_src = RMT_CLK_SRC_DEFAULT,         //set clock source to default
         .gpio_num = RMT_TENS_PHASE_A_GPIO_NUM,  //set gpio number of this peripheral
-        .mem_block_symbols = 256,               //set block size to 256. Can be as low as 64
+        .mem_block_symbols = 64,               //set block size to 256. Can be as low as 64
         .resolution_hz = RMT_RESOLUTION_HZ,     //Set clock resolution to 10MHz
         .trans_queue_depth = 1,                 // set the number of transactions that can be pending in the background
     };
@@ -124,7 +123,7 @@ void app_main(void)
     rmt_tx_channel_config_t tens_phase_B_chan_config = {
         .clk_src = RMT_CLK_SRC_DEFAULT,         //set clock source to default
         .gpio_num = RMT_TENS_PHASE_B_GPIO_NUM,  //set gpio number of this peripheral
-        .mem_block_symbols = 256,               //set block size to 256. Can be as low as 64
+        .mem_block_symbols = 64,               //set block size to 256. Can be as low as 64
         .resolution_hz = RMT_RESOLUTION_HZ,     //Set clock resolution to 10MHz
         .trans_queue_depth = 1,                 // set the number of transactions that can be pending in the background
     };
@@ -165,6 +164,12 @@ void app_main(void)
     rmt_transmit_config_t tx_config = {     //This will be re-used for both phases
         .loop_count = 0, // no transfer loop
     };
+
+    rmt_channel_handle_t tens_channels[2] = {
+                                            tens_phase_A_chan,
+                                            tens_phase_B_chan
+                                            };  
+
     
     //Create new RMT tx channel synchronization manager
     rmt_sync_manager_handle_t synchro = NULL;
@@ -172,7 +177,7 @@ void app_main(void)
         .tx_channel_array = tens_channels,
         .array_size = sizeof(tens_channels) / sizeof(tens_channels[0]),
     };
-    // ESP_ERROR_CHECK(rmt_new_sync_manager(&synchro_config, &synchro));
+    ESP_ERROR_CHECK(rmt_new_sync_manager(&synchro_config, &synchro));
 
 
     //Write the payload to be passed to the RMT peripheral
