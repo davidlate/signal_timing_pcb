@@ -483,7 +483,7 @@ void app_main(void)
     while (1) {
         
         i2s_write_function(wave);
-    gpio_set_level(GPIO_NUM_17, 0);
+        gpio_set_level(GPIO_NUM_17, 0);
 
         // vTaskDelay(pdMS_TO_TICKS(20));
         //Write to the RMT channel for it to begin writing the desired sequence.
