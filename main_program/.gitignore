@@ -1,0 +1,8 @@
+build/
+.vscode/
+.devcontainer/
+components/esp/GPTimer
+components/esp/hello_world
+components/esp/sample_i2s_proj
+components/esp/sample_sine_wave_generator
+components/esp/v5.3.1/*
