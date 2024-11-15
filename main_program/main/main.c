@@ -222,8 +222,7 @@ typedef struct {
 #define TENS_PULSE_WIDTH_US             150         //150us pulse width per phase
 #define TENS_INTERPHASE_DEADTIME_US     0.5         //500ns deadtime between phases to prevent shoot-through
 #define TENS_PULSE_PERIOD_US            1000        //Send 1 bi-phasic pulse every 1ms
-#define RMT_PHASE_TRIM_US              21.5
-
+#define RMT_PHASE_TRIM_US              21.77        //Compensate for execution time of RMT_transmit function to synchronize channels.  Lower number brings them closer
 
 static const rmt_symbol_word_t TENS_pulse_high = {  //This sends a TENS pulse
     .level0 = 1,
@@ -557,6 +556,7 @@ void app_main(void)
     int32_t period_us = 0;
     int32_t last_time_us = start_time_us;
     int32_t write_time_us_main = start_time_us;
+    int32_t WRITE_TRIM_US = 7.5e3;
     float period_ms;
 
     while (j<300) {
@@ -569,10 +569,10 @@ void app_main(void)
 
         i2s_write_function(wave, &write_time_us_main, start_time_us);
 
-        ets_delay_us(DURATION_MS*1000+5e3-(esp_timer_get_time()-write_time_us_main-start_time_us));
+        ets_delay_us(DURATION_MS*1000+5e3+WRITE_TRIM_US-(esp_timer_get_time()-write_time_us_main-start_time_us));
         //Write to the RMT channel for it to begin writing the desired sequence.
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
-        ets_delay_us(RMT_PHASE_TRIM_US)
+        // ets_delay_us(RMT_PHASE_TRIM_US)
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
         //Wait for the RMT channel to finish writing.
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_A_chan, portMAX_DELAY));
