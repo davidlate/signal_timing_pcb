@@ -329,6 +329,11 @@ typedef struct {
 } example_queue_element_t;
 
 typedef struct{
+    int* w;
+    int32_t* wave_passthrough;
+}   sound_struct;
+
+typedef struct{
     rmt_channel_handle_t tens_phase_chan;
     rmt_encoder_handle_t tens_phase_encoder;
     int tens_phase_sequence;
@@ -540,6 +545,11 @@ void app_main(void)
     };
 
     int w = 0;
+
+    sound_struct wave_data = {
+        .w = &w,
+        .wave_passthrough=wave,
+    };
 
     rmt_passthrough_struct rmt_passthrough = {
         .tens_phase_chan = tens_phase_A_chan,
