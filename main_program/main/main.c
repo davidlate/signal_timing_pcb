@@ -4,7 +4,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "driver/rmt_tx.h"
-
+#include "driver/gptimer.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -97,13 +97,13 @@ void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENC
 
 static void i2s_write_function(void *waveform)
 {    
-    printf("\n5\n");
+    // printf("\n5\n");
 
     int32_t *audio_waveform = (int32_t*)waveform;           //Cast the waveform argumen to a 32-bit int pointer
-    printf("\n6\n");
+    // printf("\n6\n");
 
     size_t WAVEFORM_SIZE = (int32_t)WAVEFORM_LEN * sizeof(int32_t);
-    printf("Here");
+    // printf("Here");
 
     int32_t *w_buf = (int32_t *)calloc(sizeof(int32_t), WAVEFORM_LEN);   //Allocate memory for the I2S write buffer
     assert(w_buf);                                          //Check if buffer was allocated successfully
@@ -120,7 +120,7 @@ static void i2s_write_function(void *waveform)
 
     /*Here, we initialize our time-tracking and index-tracking variables*/
     float start_time_us = (float)esp_timer_get_time();
-    printf("Time Of Loop Start: %0.6f ms", start_time_us/(float)1000);
+    // printf("Time Of Loop Start: %0.6f ms", start_time_us/(float)1000);
     float curr_time_us = start_time_us;
     float last_time_us = curr_time_us;
     float period_us    = 0;
@@ -129,29 +129,29 @@ static void i2s_write_function(void *waveform)
     /*This begins the sound-writing loop, which is limited to 300 iterations for testing purposes*/
     // while(idx < 300){           
 
-        /*The I2S channel is enabled and disabled every loop.  This has been found to enable the most repeatable results*/
-        // ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));       
+    /*The I2S channel is enabled and disabled every loop.  This has been found to enable the most repeatable results*/
+    // ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));       
 
-        /*Find current time and period of last loop*/
-        curr_time_us = (float)(esp_timer_get_time()) - start_time_us;   
-        period_us = curr_time_us - last_time_us;
-        last_time_us = curr_time_us;
+    /*Find current time and period of last loop*/
+    curr_time_us = (float)(esp_timer_get_time()) - start_time_us;   
+    period_us = curr_time_us - last_time_us;
+    last_time_us = curr_time_us;
 
-        /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
-        we would use the wbytes variable to move along wbuf and start a new write at the position where the 
-        last one left off.  That's not the case here, though*/
-        for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
+    /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
+    we would use the wbytes variable to move along wbuf and start a new write at the position where the 
+    last one left off.  That's not the case here, though*/
+    for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
 
-            i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
+        i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
 
-        };
+    };
 
-        printf("Current Loop Time: %0.1f ms\n", curr_time_us/1000);
-        printf("Current Loop Period: %0.6f ms\n", period_us/1000);
+    // printf("Current Loop Time: %0.1f ms\n", curr_time_us/1000);
+    // printf("Current Loop Period: %0.6f ms\n", period_us/1000);
 
-        // ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));      //Disable channel each loop, as described above
-        
-        idx++;
+    // ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));      //Disable channel each loop, as described above
+    
+    idx++;
 
 
     free(w_buf);
@@ -174,7 +174,7 @@ static void i2s_channel_setup(void)
         .dma_frame_num = SIZE_DMA_BUFF,
         .auto_clear_before_cb = true,
     }
-        
+
     ESP_ERROR_CHECK(i2s_new_channel(&tx_chan_cfg, &tx_chan, NULL));
 
     /* Step 2: Setting the configurations of standard mode and initialize each channels one by one
@@ -220,13 +220,7 @@ static void i2s_channel_setup(void)
 
 }
 
-
-
-
 //RMT DEFINITIONS__________________________________________________________________I2S END_______________________I2S END___________________________________
-
-
-
 
 #define RMT_RESOLUTION_HZ 10000000              //10MHz resolution, 1 tick = 0.1us (led strip needs a high resolution)
 #define RMT_TENS_PHASE_A_GPIO_NUM      5
@@ -326,14 +320,68 @@ static size_t encoder_callback(const void *data, size_t data_size,
 
 //RMT DEFINITIONS__________________________________________________________________RMT END_______________________RMT END___________________________________
 
+//GPTimer DEFINITIONS__________________________________________________________________GPTimer START_______________________GPTimer END___________________________________
+
+typedef struct {
+    uint64_t event_count;
+} example_queue_element_t;
+
+typedef struct{
+    int* w;
+    int32_t* wave_passthrough;
+}   sound_struct;
+
+typedef struct{
+    rmt_channel_handle_t tens_phase_chan;
+    rmt_encoder_handle_t tens_phase_encoder;
+    int tens_phase_sequence;
+    rmt_transmit_config_t *tx_config_ptr;
+    int * w;
+}   rmt_passthrough_struct;
+
+static bool example_timer_on_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
+{
+    BaseType_t high_task_awoken = pdFALSE;
+
+    rmt_passthrough_struct* data_ptr = (rmt_passthrough_struct*)user_ctx;
+
+    int *w = data_ptr->w;
+    rmt_passthrough_struct data = *data_ptr;
+
+    // ESP_ERROR_CHECK(rmt_transmit((rmt_channel_handle_t)data.tens_phase_chan,
+    //                              (rmt_encoder_handle_t)data.tens_phase_encoder,
+    //                              (int)data.tens_phase_sequence,
+    //                              sizeof((int)data.tens_phase_sequence),
+    //                              (rmt_transmit_config_t*)data.tx_config_ptr));
 
 
+    // int32_t *wave = data->wave_passthrough;
+
+
+    // int *w = (int *)user_ctx;
+    // QueueHandle_t queue = (QueueHandle_t)user_ctx;
+    // Retrieve the count value from event data
+    // example_queue_element_t ele = {
+    //     .event_count = edata->count_value
+    // };
+
+    gpio_set_level(GPIO_NUM_17, *w);
+    // i2s_write_function(wave);
+    *w = (*w == 1) ? 0 : 1;
+
+    // Optional: send the event data to other task by OS queue
+    // Do not introduce complex logics in callbacks
+    // Suggest dealing with event data in the main loop, instead of in this callback
+    // xQueueSendFromISR(queue, &ele, &high_task_awoken);
+    // return whether we need to yield at the end of ISR
+    return high_task_awoken == pdTRUE;
+}
+//GPTimer DEFINITIONS__________________________________________________________________GPTimer END_______________________GPTimer END___________________________________
 
 
 
 void app_main(void)
 {
-
     //RMT Main Function______________________________________________________RMT MAIN START________________________________RMT MAIN START______________________
     ESP_LOGI(TAG, "Create RMT TX channel");
 
@@ -469,26 +517,71 @@ void app_main(void)
 
     i2s_channel_setup();
 
-    //I2S Main Function______________________________________________________I2S MAIN END________________________________RMT MAIN END______________________
+    //I2S Main Function______________________________________________________I2S MAIN END________________________________I2S MAIN END______________________
 
+    //GPTimer Main Function__________________________________________________GPTimer_____________________________________GPTimer_START
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t timer_config = {
+    .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+    .direction = GPTIMER_COUNT_UP,
+    .resolution_hz = 1 * 1000 * 1000, // 1MHz, 1 tick = 1us
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    gptimer_alarm_config_t alarm_config = {
+    .reload_count = -1, // counter will reload with 0 on alarm event
+    .alarm_count = 200e3, // period = 500ms @resolution 1MHz
+    .flags.auto_reload_on_alarm = true, // enable auto-reload
+    };
+
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = example_timer_on_alarm_cb, // register user callback
+    };
+
+    int w = 0;
+
+    sound_struct wave_data = {
+        .w = &w,
+        .wave_passthrough=wave,
+    };
+
+    rmt_passthrough_struct rmt_passthrough = {
+        .tens_phase_chan = tens_phase_A_chan,
+        .tens_phase_encoder = tens_phase_A_encoder,
+        .tens_phase_sequence = tens_phase_A_sequence,
+        .tx_config_ptr = &tx_config,
+        .w = &w,
+    };
+
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &rmt_passthrough));
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+    //GPTimer Main Function__________________________________________________GPTimer_____________________________________GPTimer_START
+
+    gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
 
     int j=0;
-    while (j<100) {
-        
-        i2s_write_function(wave);
+    while (j<300) {
+
+        // i2s_write_function(wave);
         // vTaskDelay(pdMS_TO_TICKS(20));
 
         //Write to the RMT channel for it to begin writing the desired sequence.
-        ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
-        ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
+        // ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
+        // ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
 
         //Wait for the RMT channel to finish writing.
         // ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_A_chan, portMAX_DELAY));
         // ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_B_chan, portMAX_DELAY));
 
-
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(1000));
         j++;
         printf("idx: %i\n", j);
+        printf("w: %i\n", w);
+
     }
+
 }
