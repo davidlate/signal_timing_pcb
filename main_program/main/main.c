@@ -25,8 +25,7 @@
 #include "esp_system.h" 
 #include "esp_task_wdt.h"
 #include "esp_sntp.h"
-
-
+#include <rom/ets_sys.h>
 
 
 
@@ -97,7 +96,7 @@ void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENC
 }
 
 
-static void i2s_write_function(void *waveform)
+static void i2s_write_function(void *waveform, int32_t *write_time_us, int32_t start_time_us)
 {    
     // printf("\n5\n");
 
@@ -108,7 +107,6 @@ static void i2s_write_function(void *waveform)
     // printf("Here");
 
     int32_t *w_buf = (int32_t *)calloc(sizeof(int32_t), WAVEFORM_LEN);   //Allocate memory for the I2S write buffer
-    assert(w_buf);                                          //Check if buffer was allocated successfully
     size_t w_bytes = I2S_BUFF_SIZE;                         //Create variable to track how many bytes are written to the I2S DMA buffer
     size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
 
@@ -119,45 +117,16 @@ static void i2s_write_function(void *waveform)
         audio_samples_pos++;
         }
 
-
-    /*Here, we initialize our time-tracking and index-tracking variables*/
-    float start_time_us = (float)esp_timer_get_time();
-    // printf("Time Of Loop Start: %0.6f ms", start_time_us/(float)1000);
-    float curr_time_us = start_time_us;
-    float last_time_us = curr_time_us;
-    float period_us    = 0;
-    int idx = 0;
-
-    /*This begins the sound-writing loop, which is limited to 300 iterations for testing purposes*/
-    // while(idx < 300){           
-
-    /*The I2S channel is enabled and disabled every loop.  This has been found to enable the most repeatable results*/
-    // ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));       
-
-    /*Find current time and period of last loop*/
-    curr_time_us = (float)(esp_timer_get_time()) - start_time_us;   
-    period_us = curr_time_us - last_time_us;
-    last_time_us = curr_time_us;
-
     /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
     we would use the wbytes variable to move along wbuf and start a new write at the position where the 
     last one left off.  That's not the case here, though*/
-    for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
+    // for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
+    *write_time_us = esp_timer_get_time() - start_time_us;
+    i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
 
-        i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
-
-    };
-
-    // printf("Current Loop Time: %0.1f ms\n", curr_time_us/1000);
-    // printf("Current Loop Period: %0.6f ms\n", period_us/1000);
-
-    // ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));      //Disable channel each loop, as described above
-    
-    idx++;
-
+    // };    
 
     free(w_buf);
-    printf("Loop Ended\n");
 }
 
  
@@ -235,7 +204,8 @@ static const char *TAG = "example";
 enum TENS_state {                              //states of TENS output
     PULSE_HIGH,
     PULSE_LOW_FOR_COMPLEMENTARY_PHASE,
-    PULSE_WAIT_ZONE
+    PULSE_WAIT_ZONE,
+    PULSE_LOW_TRIM,
     };
 
 enum TENS_phase_state{
@@ -252,6 +222,7 @@ typedef struct {
 #define TENS_PULSE_WIDTH_US             150         //150us pulse width per phase
 #define TENS_INTERPHASE_DEADTIME_US     0.5         //500ns deadtime between phases to prevent shoot-through
 #define TENS_PULSE_PERIOD_US            1000        //Send 1 bi-phasic pulse every 1ms
+#define RMT_PHASE_TRIM_US              21.5
 
 
 static const rmt_symbol_word_t TENS_pulse_high = {  //This sends a TENS pulse
@@ -266,6 +237,13 @@ static const rmt_symbol_word_t TENS_pulse_low = {   //This is a timeholder to ke
     .duration0 = ((TENS_PULSE_WIDTH_US) * RMT_RESOLUTION_HZ )/ 1000000, //150 us  Add -21.5 to trim output and sync with next channel
     .level1 = 0,
     .duration1 = TENS_INTERPHASE_DEADTIME_US * RMT_RESOLUTION_HZ / 1000000, //0.5 us
+};
+
+static const rmt_symbol_word_t TENS_pulse_trim = {  //This sends a TENS pulse
+    .level0 = 0,
+    .duration0 = RMT_PHASE_TRIM_US/2 * RMT_RESOLUTION_HZ / 1000000, //150 us
+    .level1 = 0,
+    .duration1 = RMT_PHASE_TRIM_US/2 * RMT_RESOLUTION_HZ / 1000000,  //0.5 us
 };
 
 static const rmt_symbol_word_t TENS_pulse_interpulse = {    //This controls the inter-pulse timing
@@ -306,6 +284,10 @@ static size_t encoder_callback(const void *data, size_t data_size,
 
             case PULSE_WAIT_ZONE:
                 symbols[symbol_pos++] = TENS_pulse_interpulse;
+                break;
+
+            case PULSE_LOW_TRIM:
+                symbols[symbol_pos++] = TENS_pulse_trim;
                 break;
 
             default:
@@ -463,7 +445,8 @@ void app_main(void)
 
     //Write the payload to be passed to the RMT peripheral
 
-    int tens_phase_A_sequence[8] = {    PULSE_HIGH,
+    int tens_phase_A_sequence[9] = {    PULSE_LOW_TRIM,
+                                        PULSE_HIGH,
                                         PULSE_LOW_FOR_COMPLEMENTARY_PHASE,
                                         PULSE_WAIT_ZONE,
                                         PULSE_HIGH,
@@ -508,15 +491,11 @@ void app_main(void)
     //                                                     //more frequently than the "timeout_ms" amount of time
 
 
-    printf("\n1\n");
-
     int32_t *wave = calloc(WAVEFORM_LEN, sizeof(int32_t));
     double *wave_double = calloc(WAVEFORM_LEN, sizeof(double));
     // Create the sine wave
-    printf("\n2\n");
 
     create_sine_wave(wave, wave_double, FREQUENCY);
-    printf("\n3\n");
 
 
     i2s_channel_setup();
@@ -560,30 +539,54 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &rmt_passthrough));
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
+    // ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    // ESP_ERROR_CHECK(gptimer_start(gptimer));
 
     //GPTimer Main Function__________________________________________________GPTimer_____________________________________GPTimer_START
 
     gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
 
     int j=0;
+
+
+        /*Find current time and period of last loop*/
+    int32_t start_time_us = esp_timer_get_time();
+    int32_t curr_time_us = start_time_us;
+    int32_t curr_time1_us = start_time_us;
+    int32_t curr_time2_us = start_time_us;
+    int32_t period_us = 0;
+    int32_t last_time_us = start_time_us;
+    int32_t write_time_us_main = start_time_us;
+    float period_ms;
+
     while (j<300) {
+        curr_time_us = (esp_timer_get_time()) - start_time_us;   
+        period_us = curr_time_us - last_time_us;
+        period_ms = (float)period_us / (float)1000;
+        last_time_us = curr_time_us;
 
-        i2s_write_function(wave);
+        curr_time1_us = (esp_timer_get_time()) - start_time_us;
 
+        i2s_write_function(wave, &write_time_us_main, start_time_us);
+
+        ets_delay_us(DURATION_MS*1000+5e3-(esp_timer_get_time()-write_time_us_main-start_time_us));
         //Write to the RMT channel for it to begin writing the desired sequence.
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
+        ets_delay_us(RMT_PHASE_TRIM_US)
         ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
-
         //Wait for the RMT channel to finish writing.
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_A_chan, portMAX_DELAY));
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_B_chan, portMAX_DELAY));
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+
         j++;
         printf("idx: %i\n", j);
         printf("w: %i\n", w);
+        printf("Period: %0.3f ms\n",period_ms);
+        curr_time2_us = (esp_timer_get_time()) - start_time_us;   
+
+        ets_delay_us(200e3 - (curr_time2_us - curr_time_us));
+
 
     }
 
