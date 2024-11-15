@@ -28,6 +28,8 @@
 
 
 
+
+
 //I2S DEFINITIONS__________________________________________________________________I2S START_______________________I2S START___________________________________
 
 
@@ -488,20 +490,22 @@ void app_main(void)
     int64_t start_time = esp_timer_get_time();
     double start_time_ms  = (double)(start_time) / (double)(1000);
     printf("Current Time:  %0.10f ms\n", start_time_ms);
-    esp_task_wdt_config_t watchdog_config = {   //Configure watchdog timer
-        .timeout_ms = 500000,                      //Set watchdog timeout in ms
-        .idle_core_mask = 0,                    //Set to 0 to allow "feeding" the watchdog, set to 1 if you enjoy unhappiness
-        .trigger_panic = false                  //Watchdog timer does not cause panic
-    };
 
-    // esp_task_wdt_init(&watchdog_config);            //Initialize watchdog using configuration.  May not strictly be necessary and may throw a harmless error
-                                                        // if the watchdog has already started
-    esp_task_wdt_reconfigure(&watchdog_config);     //Reconfigure task using configuration.  This ~IS~ necessary because the watchdog may have already been started
-                                                        //with undesireable parameters.
-    esp_task_wdt_add(xTaskGetCurrentTaskHandle());  //Add the current task to the watchdog.  This is necessary for the "feeding" to function
+
+    // esp_task_wdt_config_t watchdog_config = {   //Configure watchdog timer
+    //     .timeout_ms = 500000,                      //Set watchdog timeout in ms
+    //     .idle_core_mask = 0,                    //Set to 0 to allow "feeding" the watchdog, set to 1 if you enjoy unhappiness
+    //     .trigger_panic = false                  //Watchdog timer does not cause panic
+    // };
+
+    // // esp_task_wdt_init(&watchdog_config);            //Initialize watchdog using configuration.  May not strictly be necessary and may throw a harmless error
+    //                                                     // if the watchdog has already started
+    // esp_task_wdt_reconfigure(&watchdog_config);     //Reconfigure task using configuration.  This ~IS~ necessary because the watchdog may have already been started
+    //                                                     //with undesireable parameters.
+    // esp_task_wdt_add(xTaskGetCurrentTaskHandle());  //Add the current task to the watchdog.  This is necessary for the "feeding" to function
     
-    esp_task_wdt_reset();                           //Feed the watchdog timer by calling esp_task_wdt_reset() periodically
-                                                        //more frequently than the "timeout_ms" amount of time
+    // esp_task_wdt_reset();                           //Feed the watchdog timer by calling esp_task_wdt_reset() periodically
+    //                                                     //more frequently than the "timeout_ms" amount of time
 
 
     printf("\n1\n");
@@ -566,16 +570,15 @@ void app_main(void)
     int j=0;
     while (j<300) {
 
-        // i2s_write_function(wave);
-        // vTaskDelay(pdMS_TO_TICKS(20));
+        i2s_write_function(wave);
 
         //Write to the RMT channel for it to begin writing the desired sequence.
-        // ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
-        // ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
+        ESP_ERROR_CHECK(rmt_transmit(tens_phase_A_chan, tens_phase_A_encoder, tens_phase_A_sequence, sizeof(tens_phase_A_sequence), &tx_config));
+        ESP_ERROR_CHECK(rmt_transmit(tens_phase_B_chan, tens_phase_B_encoder, tens_phase_B_sequence, sizeof(tens_phase_B_sequence), &tx_config));
 
         //Wait for the RMT channel to finish writing.
-        // ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_A_chan, portMAX_DELAY));
-        // ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_B_chan, portMAX_DELAY));
+        ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_A_chan, portMAX_DELAY));
+        ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_B_chan, portMAX_DELAY));
 
         vTaskDelay(pdMS_TO_TICKS(1000));
         j++;
