@@ -41,9 +41,9 @@ the BCLK and WS signal
  * and ESP32-S2 has only one I2S controller, so it can't allocate two simplex channels */
 #define EXAMPLE_I2S_DUPLEX_MODE         CONFIG_USE_DUPLEX
 
-#define EXAMPLE_STD_WS_IO1          13      // I2S word select io number
-#define EXAMPLE_STD_DOUT_IO1        12     // I2S data out io number
-#define EXAMPLE_STD_BCLK_IO1        11      // I2S bit clock io number
+#define EXAMPLE_STD_WS_IO1          1      //LCK, LRC, 13 I2S word select io number
+#define EXAMPLE_STD_DOUT_IO1        2     //DIN, 12 I2S data out io number
+#define EXAMPLE_STD_BCLK_IO1        3      //BCK 11  I2S bit clock io number
 
 #define BITS_IN_32BIT               2147483647
 #define VOL_PERCENT                 10
@@ -98,13 +98,10 @@ void create_sine_wave(int32_t * waveform, double * waveform_double, int FREQUENC
 
 static void i2s_write_function(void *waveform, int32_t *write_time_us, int32_t start_time_us)
 {    
-    // printf("\n5\n");
 
     int32_t *audio_waveform = (int32_t*)waveform;           //Cast the waveform argumen to a 32-bit int pointer
-    // printf("\n6\n");
 
     size_t WAVEFORM_SIZE = (int32_t)WAVEFORM_LEN * sizeof(int32_t);
-    // printf("Here");
 
     int32_t *w_buf = (int32_t *)calloc(sizeof(int32_t), WAVEFORM_LEN);   //Allocate memory for the I2S write buffer
     size_t w_bytes = I2S_BUFF_SIZE;                         //Create variable to track how many bytes are written to the I2S DMA buffer
@@ -537,7 +534,7 @@ void app_main(void)
         .w = &w,
     };
 
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &rmt_passthrough));
+    // ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &rmt_passthrough));
     // ESP_ERROR_CHECK(gptimer_enable(gptimer));
     // ESP_ERROR_CHECK(gptimer_start(gptimer));
 
@@ -577,7 +574,6 @@ void app_main(void)
         //Wait for the RMT channel to finish writing.
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_A_chan, portMAX_DELAY));
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(tens_phase_B_chan, portMAX_DELAY));
-
 
         j++;
         printf("idx: %i\n", j);
