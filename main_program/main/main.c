@@ -61,8 +61,8 @@ int i;
 
 // const int SAMPLE_RATE = 16000;
 // const int DURATION_MS = 10;
-int R_FREQUENCY_1          = 1000;
-int L_FREQUENCY_1          = 5000;
+int R_FREQUENCY_1          = 500;
+int L_FREQUENCY_1          = 7000;
 
 
 void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
@@ -83,8 +83,9 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
     }
     double volume = (double)VOL_PERCENT / (double)100;                  //Operands must be cast to double for this to work.
     // Populate the waveform array with sine values
+    int t = 0;
     for (int i = 0; i < WAVEFORM_LEN; i+=2) {
-        double timestep = (double)(i) / (double)SAMPLE_RATE;
+        double timestep = (double)(t) / (double)SAMPLE_RATE;
         double sine_point_L = (volume * sin(2 * M_PI * L_FREQUENCY * timestep));  // Use 2 * PI for full sine wave cycle
         double sine_point_R = (volume * sin(2 * M_PI * R_FREQUENCY * timestep));
 
@@ -93,6 +94,7 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
 
         waveform[i]   = int_point_L;
         waveform[i+1] = int_point_R;
+        t++;
     }
     printf("Made it through sine wave function\n");
 
@@ -162,7 +164,7 @@ static void i2s_channel_setup(void)
     .slot_cfg   = { 
                 .data_bit_width = I2S_DATA_BIT_WIDTH_32BIT,
                 .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO,
-                .slot_mode = I2S_SLOT_MODE_MONO,
+                .slot_mode = I2S_SLOT_MODE_STEREO,
                 .slot_mask = I2S_STD_SLOT_BOTH,
                 .ws_width = I2S_DATA_BIT_WIDTH_32BIT,
                 .ws_pol = 0,
