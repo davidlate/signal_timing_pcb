@@ -488,7 +488,7 @@ void app_main(void)
 
 
     int32_t *wave = calloc(WAVEFORM_LEN, sizeof(int32_t));
-    double *wave_double = calloc(WAVEFORM_LEN, sizeof(double));
+    double  *wave_double = calloc(WAVEFORM_LEN, sizeof(double));
     // Create the sine wave
 
     create_sine_wave(wave, wave_double, FREQUENCY);
