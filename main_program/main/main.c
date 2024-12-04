@@ -27,6 +27,10 @@
 #include "esp_sntp.h"
 #include <rom/ets_sys.h>
 
+#include "driver/adc.h"
+#include "esp_adc_cal.h"
+#include "hal/adc_types.h"
+
 
 
 //I2S DEFINITIONS__________________________________________________________________I2S START_______________________I2S START___________________________________
@@ -41,81 +45,134 @@ the BCLK and WS signal
  * and ESP32-S2 has only one I2S controller, so it can't allocate two simplex channels */
 #define EXAMPLE_I2S_DUPLEX_MODE         CONFIG_USE_DUPLEX
 
+#define VOL_PIN                     GPIO_NUM_9
+
 #define EXAMPLE_STD_WS_IO1          1      //LCK, LRC, 13 I2S word select io number
 #define EXAMPLE_STD_DOUT_IO1        2     //DIN, 12 I2S data out io number
 #define EXAMPLE_STD_BCLK_IO1        3      //BCK 11  I2S bit clock io number
 
-#define BITS_IN_32BIT               2147483647
+#define BITS_IN_32BIT               2147483647       //2^31 - 1
 #define VOL_PERCENT                 10
 
 #define SAMPLE_RATE                 96000
-#define DURATION_MS                 25
-#define WAVEFORM_LEN                SAMPLE_RATE/1000*DURATION_MS*2
+#define DURATION_MS                 10
+#define AUDIO_RISE_TIME_MS          1
+#define AUDIO_FALL_TIME_MS          1
+
+#define WAVEFORM_LEN                SAMPLE_RATE/1000*(DURATION_MS+AUDIO_RISE_TIME_MS+AUDIO_FALL_TIME_MS)*2
 #define NUM_DMA_BUFF                6
-#define SIZE_DMA_BUFF               800
+#define SIZE_DMA_BUFF               1000
 #define I2S_BUFF_SIZE               NUM_DMA_BUFF * SIZE_DMA_BUFF
+
+#define MAX_VOLUME_LINEAR_PERCENT   20
+#define MIN_VOLUME_dBFS             -60
 
 static i2s_chan_handle_t                tx_chan;        // I2S tx channel handler
 
-int i;
 
-// const int SAMPLE_RATE = 16000;
-// const int DURATION_MS = 10;
+
 int R_FREQUENCY_1          = 500;
-int L_FREQUENCY_1          = 7000;
+int R_FREQUENCY_2          = 0;
 
+int R_VOL_DBFS_2           = -120;
+
+
+int L_FREQUENCY_1          = 7000;
+int L_FREQUENCY_2          = 0;
+
+int L_VOL_DBFS_1           = -120;
+int L_VOL_DBFS_2           = -120;
+
+
+double dBFS_to_linear(int dBFS){
+    double linear = pow(10, (double)dBFS/20);
+    return linear;
+}
 
 void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
-    // Calculate the number of samples
-    printf("Free heap size before allocation: %lu bytes\n", esp_get_free_heap_size());
 
-    printf("Num Samples: %d\n", WAVEFORM_LEN);
-    printf("Size of double: %u\n", sizeof(double));
-
-    // Allocate memory for the waveform array
-    // int32_t *waveform = (int32_t *)malloc(WAVEFORM_LEN * sizeof(int32_t));
-    printf("Free heap size after allocation: %lu bytes\n", esp_get_free_heap_size());
-
-    // Check if memory allocation was successful
-    if (waveform == NULL) {
-        printf("Memory allocation failed!\n");
-        // return NULL;  // Return NULL if allocation failed
-    }
-    double volume = (double)VOL_PERCENT / (double)100;                  //Operands must be cast to double for this to work.
     // Populate the waveform array with sine values
     int t = 0;
-    for (int i = 0; i < WAVEFORM_LEN; i+=2) {
-        double timestep = (double)(t) / (double)SAMPLE_RATE;
-        double sine_point_L = (volume * sin(2 * M_PI * L_FREQUENCY * timestep));  // Use 2 * PI for full sine wave cycle
-        double sine_point_R = (volume * sin(2 * M_PI * R_FREQUENCY * timestep));
+    double timestep = 0;
+    double amplitude = 0;
+    double fall_start_time_ms = AUDIO_RISE_TIME_MS+WAVEFORM_LEN+AUDIO_FALL_TIME_MS;
 
-        int32_t int_point_L = (int32_t)(sine_point_L*BITS_IN_32BIT);
-        int32_t int_point_R = (int32_t)(sine_point_R*BITS_IN_32BIT);
+    double R_amplitude_1 = 1;
+    double R_amplitude_2 = dBFS_to_linear(R_VOL_DBFS_2);
+    double L_amplitude_1 = dBFS_to_linear(L_VOL_DBFS_1);
+    double L_amplitude_2 = dBFS_to_linear(L_VOL_DBFS_2);
+
+    double sine_point_R_1;
+    double sine_point_R_2;
+    double sine_point_R_tot;
+
+    double sine_point_L_1;
+    double sine_point_L_2;
+    double sine_point_L_tot;
+
+
+    //cos^2 rise fall
+
+    for (int i = 0; i < WAVEFORM_LEN; i+=2) {
+        //Define timestep
+        timestep = (double)(t) / (double)SAMPLE_RATE;
+        
+        //Setup amplitude multipliers for cos^2 ramp
+        if (timestep < AUDIO_RISE_TIME_MS){
+            amplitude = pow( cos( (M_PI/2) * (timestep / AUDIO_RISE_TIME_MS) ) , 2);
+        }
+        else if (timestep < AUDIO_RISE_TIME_MS+WAVEFORM_LEN){
+            amplitude = 1;
+        }
+        else if (timestep < fall_start_time_ms){
+            amplitude = pow( cos( (M_PI/2) * (AUDIO_FALL_TIME_MS-(timestep-fall_start_time_ms) / AUDIO_FALL_TIME_MS) ) , 2);
+        }
+
+
+        //Create right-side sine wave
+        sine_point_R_1   = R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * timestep);
+        sine_point_R_2   = R_amplitude_2 * sin(2 * M_PI * R_FREQUENCY_2 * timestep);
+        
+        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2) / (R_amplitude_1 + R_amplitude_2);
+
+        if(sine_point_R_tot >= BITS_IN_32BIT) printf("Error with Right side sine");
+
+
+        //Create left-side sine wave
+        sine_point_L_1   = L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * timestep);  // Use 2 * PI for full sine wave cycle
+        sine_point_L_2   = L_amplitude_2 * sin(2 * M_PI * L_FREQUENCY_2 * timestep);
+    
+        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2) / (L_amplitude_1 + L_amplitude_2);
+
+        if(sine_point_L_tot >= BITS_IN_32BIT) printf("Error with Left side sine");
+
+        int32_t int_point_L = (int32_t)(sine_point_L_tot*BITS_IN_32BIT);
+        int32_t int_point_R = (int32_t)(sine_point_R_tot*BITS_IN_32BIT);
 
         waveform[i]   = int_point_L;
         waveform[i+1] = int_point_R;
         t++;
     }
     printf("Made it through sine wave function\n");
-
 }
 
 
-static void i2s_write_function(void *waveform, int32_t *write_time_us, int32_t start_time_us)
+static void i2s_write_function(void *waveform, int32_t * w_buf, int32_t *write_time_us, int32_t start_time_us, double * volume_frac)
 {    
 
     int32_t *audio_waveform = (int32_t*)waveform;           //Cast the waveform argumen to a 32-bit int pointer
 
     size_t WAVEFORM_SIZE = (int32_t)WAVEFORM_LEN * sizeof(int32_t);
 
-    int32_t *w_buf = (int32_t *)calloc(sizeof(int32_t), WAVEFORM_LEN);   //Allocate memory for the I2S write buffer
     size_t w_bytes = I2S_BUFF_SIZE;                         //Create variable to track how many bytes are written to the I2S DMA buffer
     size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
 
+    double dBFS = -(*volume_frac-1) * MIN_VOLUME_dBFS;
+    double audio_vol_linear = pow(10.0, dBFS / 20.0);
 
     /*Here we iterate through each index in the audio waveform, and assign the value to the wbuf*/
     while (audio_samples_pos<WAVEFORM_LEN) {
-        w_buf[audio_samples_pos] = (audio_waveform[audio_samples_pos]);
+        w_buf[audio_samples_pos] = audio_vol_linear*(audio_waveform[audio_samples_pos]);
         audio_samples_pos++;
         }
 
@@ -128,7 +185,6 @@ static void i2s_write_function(void *waveform, int32_t *write_time_us, int32_t s
 
     // };    
 
-    free(w_buf);
 }
 
  
@@ -363,6 +419,66 @@ static bool example_timer_on_alarm_cb(gptimer_handle_t timer, const gptimer_alar
 //GPTimer DEFINITIONS__________________________________________________________________GPTimer END_______________________GPTimer END___________________________________
 
 
+//DAC Read Task
+
+void dac_read_vol_battery_task(void * audio_volume1){
+    //Setup Analog read of pot on GPIO9
+    uint32_t volt_array[30];
+    double prev_rounded_avg_volt = 0;
+    int interval_in_mV = 10;
+    int num_samples = 30;
+    int max_rounded_voltage = 3080;
+    double * audio_volume = (double*)audio_volume1;
+
+    adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_12);
+    esp_adc_cal_characteristics_t adc1_chars;
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_DEFAULT, 0, &adc1_chars);       
+    adc1_config_width(ADC_WIDTH_BIT_DEFAULT);
+
+    while(true){
+        uint32_t sum_volt_array = 0;
+        for (int i=0; i<num_samples; i++){
+            volt_array[i] = esp_adc_cal_raw_to_voltage(adc1_get_raw(ADC1_CHANNEL_7), &adc1_chars);
+            sum_volt_array += volt_array[i];
+        }
+        double avg_volt = (double)sum_volt_array / (double)num_samples;
+        double rounded_avg_volt = round(avg_volt/interval_in_mV)*interval_in_mV;
+        if (abs(rounded_avg_volt - prev_rounded_avg_volt)<=interval_in_mV && rounded_avg_volt!=max_rounded_voltage){
+            rounded_avg_volt = prev_rounded_avg_volt;
+        }
+        prev_rounded_avg_volt = rounded_avg_volt;
+
+        double voltage_fraction = rounded_avg_volt / max_rounded_voltage;
+
+        if (voltage_fraction==0) *audio_volume = 0;
+        // else if (voltage_fraction >=.9) *audio_volume = 100;
+        else{
+        *audio_volume = (voltage_fraction);
+        }
+
+        double dBFS = -(voltage_fraction-1) * MIN_VOLUME_dBFS;
+        double audio_vol_linear = pow(10.0, dBFS / 20.0);
+        printf("dBFS: %.1f dB \n", dBFS);
+        printf("Audio Linear Percent: %.1f%%", audio_vol_linear*100);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+float GetTaskHighWaterMarkPercent( TaskHandle_t task_handle, uint32_t stack_allotment )
+{
+    //from: https://esp32.com/viewtopic.php?t=11514
+  UBaseType_t uxHighWaterMark;
+  uint32_t diff;
+  float result;
+
+  uxHighWaterMark = uxTaskGetStackHighWaterMark( task_handle );
+
+  diff = stack_allotment - uxHighWaterMark;
+
+  result = ( (float)diff / (float)stack_allotment ) * 100.0;
+
+  return result;
+}
 
 void app_main(void)
 {
@@ -492,6 +608,8 @@ void app_main(void)
 
 
     int32_t *wave = calloc(WAVEFORM_LEN, sizeof(int32_t));
+    int32_t *w_buf = (int32_t *)calloc(sizeof(int32_t), WAVEFORM_LEN);   //Allocate memory for the I2S write buffer
+
     // Create the sine wave
     create_sine_wave(wave, L_FREQUENCY_1, R_FREQUENCY_1);
 
@@ -540,6 +658,17 @@ void app_main(void)
     // ESP_ERROR_CHECK(gptimer_start(gptimer));
 
     //GPTimer Main Function__________________________________________________GPTimer_____________________________________GPTimer_START
+    TaskHandle_t voltage_task_handle = NULL;
+    uint32_t voltage_task_stack_depth = 4096;
+    double volume_frac = 0;
+
+    xTaskCreate(dac_read_vol_battery_task,
+                "Volume_Knob_Read",
+                voltage_task_stack_depth,
+                &volume_frac,
+                1,
+                &voltage_task_handle);
+
 
     gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
 
@@ -557,6 +686,7 @@ void app_main(void)
     int32_t WRITE_TRIM_US = 7.5e3;
     float period_ms;
 
+
     while (j<300) {
         curr_time_us = (esp_timer_get_time()) - start_time_us;   
         period_us = curr_time_us - last_time_us;
@@ -565,7 +695,7 @@ void app_main(void)
 
         curr_time1_us = (esp_timer_get_time()) - start_time_us;
 
-        i2s_write_function(wave, &write_time_us_main, start_time_us);
+        i2s_write_function(wave, w_buf, &write_time_us_main, start_time_us, &volume_frac);
 
         ets_delay_us(DURATION_MS*1000+5e3+WRITE_TRIM_US-(esp_timer_get_time()-write_time_us_main-start_time_us));
         //Write to the RMT channel for it to begin writing the desired sequence.
@@ -580,9 +710,16 @@ void app_main(void)
         printf("idx: %i\n", j);
         printf("w: %i\n", w);
         printf("Period: %0.3f ms\n",period_ms);
+        
+        //Analog read of pot on GPIO9
+        // uint32_t mV = esp_adc_cal_raw_to_voltage(adc1_get_raw(ADC1_CHANNEL_7), &adc1_chars);
+        // printf("Voltage: %li mV\n", mV);
+        float volt_task_stack_perc = GetTaskHighWaterMarkPercent( voltage_task_handle, voltage_task_stack_depth );
+        printf("Voltage Task Stack Usage: %0.3f%%\n",volt_task_stack_perc);
+        printf("Volume: %0.2f%%\n", volume_frac);
         curr_time2_us = (esp_timer_get_time()) - start_time_us;   
-
         ets_delay_us(200e3 - (curr_time2_us - curr_time_us));
     }
+        free(w_buf);
 
 }
