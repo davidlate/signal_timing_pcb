@@ -256,6 +256,7 @@ static void i2s_write_function(void *waveform, int32_t * w_buf, int32_t *write_t
 typedef struct{
     int* q;
     i2s_chan_handle_t chan;
+    QueueHandle_t i2s_queue;
 }   sound_struct;
 
 
@@ -268,20 +269,29 @@ static bool IRAM_ATTR i2s_enable_gptimer_callback(gptimer_handle_t timer, const 
 
     i2s_channel_ISR_enable(data->chan);
 
-    (*(data->q))++;
+    int*  r = data->q;
+    QueueHandle_t i2s_gptimer_queue = data->i2s_queue;
+
+    r++;
 
     xQueueSendFromISR(i2s_gptimer_queue, data, &high_task_awoken);
     return high_task_awoken == pdTRUE;
 }
 
-static void i2s_play_task(i2s_chan_handle_t i2s_tx_chan){
+
+static void i2s_play_task(void * user_ctx){
+
+    sound_struct *data = (sound_struct*)user_ctx;
+
+    QueueHandle_t i2s_gptimer_queue = data->i2s_queue;
 
     while (true){
-        if(xQueueReceive(i2s_gptimer_queue, &data, portMAX_DELAY)){
+        if(xQueueReceive(i2s_gptimer_queue, data, portMAX_DELAY)){
             printf("Here we go\n");
         }
     }
 }
+
 
 //GPTimer DEFINITIONS__________________________________________________________________GPTimer END_______________________GPTimer END___________________________________
 
@@ -376,9 +386,12 @@ void app_main(void)
 
     int r = 0;
 
+    QueueHandle_t i2s_gptimer_queue = NULL;
+
     sound_struct wave_data = {
         .q = &r,
         .chan=tx_chan,
+        .i2s_queue=i2s_gptimer_queue
     };
 
 
@@ -402,7 +415,6 @@ void app_main(void)
                 1,
                 &voltage_task_handle);
 
-    QueueHandle_t i2s_gptimer_queue = NULL;
 
     i2s_gptimer_queue = xQueueCreate(
         /* The number of items the queue can hold. */
@@ -413,9 +425,9 @@ void app_main(void)
     xTaskCreate(i2s_play_task,
                 "I2S_Play_Task:",
                 i2s_play_task_stack_depth,
-                tx_chan,
+                &wave_data,
                 5,
-                i2s_play_task_handle);
+                &i2s_play_task_handle);
 
 
 
