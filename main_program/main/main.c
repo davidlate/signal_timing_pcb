@@ -257,21 +257,21 @@ static void i2s_write_function(void *waveform, int32_t * w_buf, int32_t *write_t
 
 
 
-typedef struct{                             // This is a structure used to hold all relevant data needed for writing to the I2S DMA buffers
-    int32_t* audio_waveform_data_ptr;       //Pointer to array holding audio data
-    int32_t* audio_write_buffer_ptr;        //Pointer to array actign as intermediate write buffer
-    double* audio_volume_linear_ptr;        //Pointer to audio volume in linear percent (direct multiplication, already converted from dB)
-    int* signal_idx_ptr;                    //Index used for debugging
-    size_t audio_samples_position;          //Current position in audio data array
-    size_t buffer_position;                 //Current position in buffer array
-    size_t words_written_to_buffer;         //Placeholder for how many bytes were actually written by i2s functions
-    size_t length_of_audio_write_buffer;    
-    size_t length_of_audio_waveform;
-    i2s_chan_handle_t chan;                 //Channel handle for current I2S channel
-    QueueHandle_t i2s_queue;                //Handle for queue used to communicate between GPTimer callback and i2s_play_task
+typedef struct{                                         // This is a structure used to hold all relevant data needed for writing to the I2S DMA buffers
+    int32_t*            audio_waveform_data_ptr;        //Pointer to array holding audio data
+    int32_t*            audio_write_buffer_ptr;         //Pointer to array actign as intermediate write buffer
+    double*             audio_volume_linear_ptr;        //Pointer to audio volume in linear percent (direct multiplication, already converted from dB)
+    int*                signal_idx_ptr;                 //Index used for debugging
+    size_t              audio_samples_position;         //Current position in audio data array
+    size_t              buffer_position;                //Current position in buffer array
+    size_t              words_written_to_buffer;        //Placeholder for how many bytes were actually written by i2s functions
+    size_t              length_of_audio_write_buffer;    
+    size_t              length_of_audio_waveform;
+    i2s_chan_handle_t   chan;                           //Channel handle for current I2S channel
+    QueueHandle_t       i2s_queue;                      //Handle for queue used to communicate between GPTimer callback and i2s_play_task
 }   sound_struct;
 
-typedef struct{                             //This structure is used to hold data communicated between the gptimer i2s callback and the i2s_play_task
+typedef struct{                                         //This structure is used to hold data communicated between the gptimer i2s callback and the i2s_play_task
     int32_t send_time_us;
 }   i2s_passthrough_struct;
 
@@ -288,7 +288,7 @@ static bool IRAM_ATTR i2s_enable_gptimer_callback(gptimer_handle_t timer, const 
 
     sound_struct *i2s_def_ptr = (sound_struct*)user_ctx;    //Cast the argument pointer into a sound_struct type
 
-    i2s_channel_ISR_enable(i2s_def_ptr->chan);              //Begin I2S transmission.  
+    i2s_channel_ISR_enable(i2s_def_ptr->chan);              //Begin I2S transmission using custom driver function.  See update i2s_common.c and .h in this repo.  
 
     BaseType_t         high_task_awoken  = pdFALSE;
     QueueHandle_t      i2s_gptimer_queue = i2s_def_ptr->i2s_queue;
@@ -307,17 +307,17 @@ static bool IRAM_ATTR i2s_enable_gptimer_callback(gptimer_handle_t timer, const 
 
 static void i2s_play_task(void * user_ctx){     
 
-    sound_struct *i2s_def_ptr = (sound_struct*)user_ctx;
+    sound_struct * i2s_def_ptr    = (sound_struct*)user_ctx;
 
-    int32_t * write_buff_ptr     = i2s_def_ptr->audio_write_buffer_ptr;
-    int32_t * audio_data_ptr     = i2s_def_ptr->audio_waveform_data_ptr;
-    size_t audio_pos             = i2s_def_ptr->audio_samples_position;
-    size_t buff_pos              = i2s_def_ptr->buffer_position;
-    size_t buff_len              = i2s_def_ptr->length_of_audio_write_buffer;
-    size_t words_written         = i2s_def_ptr->words_written_to_buffer;
-    size_t audio_len             = i2s_def_ptr->length_of_audio_waveform;
-    i2s_chan_handle_t i2s_chan   = i2s_def_ptr->chan;
-    QueueHandle_t i2s_queue      = i2s_def_ptr->i2s_queue;
+    int32_t*           write_buff_ptr   = i2s_def_ptr->audio_write_buffer_ptr;
+    int32_t*           audio_data_ptr   = i2s_def_ptr->audio_waveform_data_ptr;
+    size_t             audio_pos        = i2s_def_ptr->audio_samples_position;
+    size_t             buff_pos         = i2s_def_ptr->buffer_position;
+    size_t             buff_len         = i2s_def_ptr->length_of_audio_write_buffer;
+    size_t             words_written    = i2s_def_ptr->words_written_to_buffer;
+    size_t             audio_len        = i2s_def_ptr->length_of_audio_waveform;
+    i2s_chan_handle_t  i2s_chan         = i2s_def_ptr->chan;
+    QueueHandle_t      i2s_queue        = i2s_def_ptr->i2s_queue;
 
     i2s_passthrough_struct passthrough_data;
 
@@ -340,16 +340,16 @@ static void i2s_play_task(void * user_ctx){
         if(xQueueReceive(i2s_queue, &passthrough_data, portMAX_DELAY)){     //Wait forever until audio ISR triggers
             printf("Here we go\n");
         
-        i2s_channel_ISR_enable_finish(i2s_chan);         //Keep freeRTOS happy and finish what i2s_channel_ISR_enable started in the ISR
+        i2s_channel_ISR_enable_finish(i2s_chan);                            //Keep freeRTOS happy and finish what i2s_channel_ISR_enable started in the ISR
 
-        while(audio_pos < audio_len){                    //While the audio has not been fully transmitted (position in the audio file is less than the audio file's length)
+        while(audio_pos < audio_len){                                       //While the audio has not been fully transmitted (position in the audio file is less than the audio file's length)
             buff_pos = 0;
-            while (buff_pos < buff_len){         //overwrite to create a new buffer of the next buff_len number of audio samples
+            while (buff_pos < buff_len){                                    //overwrite to create a new buffer of the next buff_len number of audio samples
                 write_buff_ptr[buff_pos] = audio_data_ptr[audio_pos];
                 audio_pos++;
                 buff_pos++;
             }
-            buff_pos = 0;                           //Set to 0 now in case I forget to this this later:)
+            buff_pos = 0;                                                   //Set to 0 now in case I forget to this this later:)
 
             i2s_channel_write(i2s_chan, write_buff_ptr, buff_len, &words_written, portMAX_DELAY);   //Write the new buffer to the i2s bus
         }
@@ -360,7 +360,7 @@ static void i2s_play_task(void * user_ctx){
         words_written = 0;                  //words_written to 0
 
         buff_pos = 0;           
-        while (buff_pos < buff_len){            //Filling up a new buffer
+        while (buff_pos < buff_len){        //Filling up a new buffer
             write_buff_ptr[audio_pos] = audio_data_ptr[audio_pos];
             audio_pos++;
             buff_pos++;
@@ -511,11 +511,7 @@ void app_main(void)
                 &voltage_task_handle);
 
 
-    i2s_gptimer_queue = xQueueCreate(
-        /* The number of items the queue can hold. */
-        1,
-        /* Size of each each item being passed.  In this case, a pointer to the I2S passthrough struct */
-        sizeof( i2s_passthrough_struct* ) );
+    i2s_gptimer_queue = xQueueCreate(1, sizeof( i2s_passthrough_struct* ) );
 
     xTaskCreate(i2s_play_task,
                 "I2S_Play_Task:",
@@ -527,91 +523,90 @@ void app_main(void)
 
 
 
-        /*Find current time and period of last loop*/
-    int32_t start_time_us = esp_timer_get_time();
-    int32_t curr_time_us = start_time_us;
-    int32_t curr_time1_us = start_time_us;
-    int32_t curr_time2_us = start_time_us;
-    int32_t period_us = 0;
-    int32_t last_time_us = start_time_us;
-    int32_t write_time_us_main = start_time_us;
-    int32_t WRITE_TRIM_US = 7.5e3;
-    float period_ms;
-    int j=0;
-    size_t bytes_loaded;
-    UBaseType_t uxHighWaterMark;
+    //     /*Find current time and period of last loop*/
+    // int32_t start_time_us = esp_timer_get_time();
+    // int32_t curr_time_us = start_time_us;
+    // int32_t curr_time1_us = start_time_us;
+    // int32_t curr_time2_us = start_time_us;
+    // int32_t period_us = 0;
+    // int32_t last_time_us = start_time_us;
+    // int32_t write_time_us_main = start_time_us;
+    // int32_t WRITE_TRIM_US = 7.5e3;
+    // float period_ms;
+    // int j=0;
+    // size_t bytes_loaded;
+    // UBaseType_t uxHighWaterMark;
 
-    printf("Pre disabling channel\n");
-
-
-    while (j<300) {
-        curr_time_us = (esp_timer_get_time()) - start_time_us;   
-        period_us = curr_time_us - last_time_us;
-        period_ms = (float)period_us / (float)1000;
-        last_time_us = curr_time_us;
-        curr_time1_us = (esp_timer_get_time()) - start_time_us;
-
-        // i2s_write_function(wave, w_buf, &write_time_us_main, start_time_us, &volume_frac);
+    // printf("Pre disabling channel\n");
 
 
-        int32_t *audio_waveform = (int32_t*)wave;           //Cast the waveform argumen to a 32-bit int pointer
+    // while (j<300) {
+    //     curr_time_us = (esp_timer_get_time()) - start_time_us;   
+    //     period_us = curr_time_us - last_time_us;
+    //     period_ms = (float)period_us / (float)1000;
+    //     last_time_us = curr_time_us;
+    //     curr_time1_us = (esp_timer_get_time()) - start_time_us;
+
+    //     // i2s_write_function(wave, w_buf, &write_time_us_main, start_time_us, &volume_frac);
 
 
-        size_t w_bytes = I2S_BUFF_LEN;                         //Create variable to track how many bytes are written to the I2S DMA buffer
-        size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
-
-        double dBFS = -(volume_frac-1) * MIN_VOLUME_dBFS;
-        double audio_vol_linear = pow(10.0, dBFS / 20.0);
-
-        /*Here we iterate through each index in the audio waveform, and assign the value to the wbuf*/
-        while (audio_samples_pos<WAVEFORM_LEN) {
-            w_buf[audio_samples_pos] = audio_vol_linear*(audio_waveform[audio_samples_pos]);
-            audio_samples_pos++;
-            }
-
-        /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
-        we would use the wbytes variable to move along wbuf and start a new write at the position where the 
-        last one left off.  That's not the case here, though*/
-        // for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
-        write_time_us_main = esp_timer_get_time() - start_time_us;
-
-        ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));
-        bytes_loaded = 0;      
-        printf("Pre pre-loading channel\n");
-
-        do{
-           ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &bytes_loaded));
-        }
-        while(bytes_loaded == I2S_BUFF_LEN);
-
-        printf("Pre enabling channel\n");
+    //     int32_t *audio_waveform = (int32_t*)wave;           //Cast the waveform argumen to a 32-bit int pointer
 
 
-        // ESP_ERROR_CHECK(i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS));
-        printf("Audio should be playing\n");
-        ets_delay_us(500e3);
-        printf("Audio should have played\n");
-        ets_delay_us(1000e3);
-        printf("Now, channel is enabled\n");
+    //     size_t w_bytes = I2S_BUFF_LEN;                         //Create variable to track how many bytes are written to the I2S DMA buffer
+    //     size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
+
+    //     double dBFS = -(volume_frac-1) * MIN_VOLUME_dBFS;
+    //     double audio_vol_linear = pow(10.0, dBFS / 20.0);
+
+    //     /*Here we iterate through each index in the audio waveform, and assign the value to the wbuf*/
+    //     while (audio_samples_pos<WAVEFORM_LEN) {
+    //         w_buf[audio_samples_pos] = audio_vol_linear*(audio_waveform[audio_samples_pos]);
+    //         audio_samples_pos++;
+    //         }
+
+    //     /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
+    //     we would use the wbytes variable to move along wbuf and start a new write at the position where the 
+    //     last one left off.  That's not the case here, though*/
+    //     // for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
+    //     write_time_us_main = esp_timer_get_time() - start_time_us;
+
+    //     ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));
+    //     bytes_loaded = 0;      
+    //     printf("Pre pre-loading channel\n");
+
+    //     do{
+    //        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &bytes_loaded));
+    //     }
+    //     while(bytes_loaded == I2S_BUFF_LEN);
+
+    //     printf("Pre enabling channel\n");
+
+
+    //     // ESP_ERROR_CHECK(i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS));
+    //     printf("Audio should be playing\n");
+    //     ets_delay_us(500e3);
+    //     printf("Audio should have played\n");
+    //     ets_delay_us(1000e3);
+    //     printf("Now, channel is enabled\n");
 
 
 
 
-        // ets_delay_us(DURATION_MS*1000+5e3+WRITE_TRIM_US-(esp_timer_get_time()-write_time_us_main-start_time_us));
+    //     // ets_delay_us(DURATION_MS*1000+5e3+WRITE_TRIM_US-(esp_timer_get_time()-write_time_us_main-start_time_us));
 
-        uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    //     uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 
-        j++;
-        printf("Bytes Loaded: %i\n", bytes_loaded);
-        printf("Task Stack Usage: %i\n", uxHighWaterMark);
-        printf("Period: %0.3f ms\n",period_ms);
-        printf("Volume: %0.2f%%\n\n", volume_frac*100);
-        curr_time2_us = (esp_timer_get_time()) - start_time_us; 
-        i2s_channel_ISR_enable_finish(tx_chan);
+    //     j++;
+    //     printf("Bytes Loaded: %i\n", bytes_loaded);
+    //     printf("Task Stack Usage: %i\n", uxHighWaterMark);
+    //     printf("Period: %0.3f ms\n",period_ms);
+    //     printf("Volume: %0.2f%%\n\n", volume_frac*100);
+    //     curr_time2_us = (esp_timer_get_time()) - start_time_us; 
+    //     i2s_channel_ISR_enable_finish(tx_chan);
 
-        ets_delay_us(5000e3);
-        // ets_delay_us(200e3 - (curr_time2_us - curr_time_us));
-    }
-        free(w_buf);
+    //     ets_delay_us(5000e3);
+    //     // ets_delay_us(200e3 - (curr_time2_us - curr_time_us));
+    // }
 
 }
