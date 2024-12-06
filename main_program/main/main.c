@@ -123,19 +123,19 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
 
 
         //Create right-side sine wave
-        sine_point_R_1   = R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * timestep);
-        sine_point_R_2   = R_amplitude_2 * sin(2 * M_PI * R_FREQUENCY_2 * timestep);
+        sine_point_R_1   = amplitude * R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * timestep);
+        sine_point_R_2   = amplitude * R_amplitude_2 * sin(2 * M_PI * R_FREQUENCY_2 * timestep);
         
-        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2) / (R_amplitude_1 + R_amplitude_2);
+        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2) / (amplitude * (R_amplitude_1 + R_amplitude_2));
 
         if(sine_point_R_tot >= BITS_IN_32BIT) printf("Error with Right side sine");
 
 
         //Create left-side sine wave
-        sine_point_L_1   = L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * timestep);  // Use 2 * PI for full sine wave cycle
-        sine_point_L_2   = L_amplitude_2 * sin(2 * M_PI * L_FREQUENCY_2 * timestep);
+        sine_point_L_1   = amplitude * L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * timestep);  // Use 2 * PI for full sine wave cycle
+        sine_point_L_2   = amplitude * L_amplitude_2 * sin(2 * M_PI * L_FREQUENCY_2 * timestep);
     
-        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2) / (L_amplitude_1 + L_amplitude_2);
+        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2) / (amplitude * (L_amplitude_1 + L_amplitude_2));
 
         if(sine_point_L_tot >= BITS_IN_32BIT) printf("Error with Left side sine");
 
@@ -402,7 +402,7 @@ void dac_read_vol_battery_task(void * audio_volume1){
         }
         double avg_volt = (double)sum_volt_array / (double)num_samples;
         double rounded_avg_volt = round(avg_volt/interval_in_mV)*interval_in_mV;
-        if (abs(rounded_avg_volt - prev_rounded_avg_volt)<=interval_in_mV && rounded_avg_volt!=max_rounded_voltage){
+        if (fabs(rounded_avg_volt - prev_rounded_avg_volt)<=interval_in_mV && rounded_avg_volt!=max_rounded_voltage){
             rounded_avg_volt = prev_rounded_avg_volt;
         }
         prev_rounded_avg_volt = rounded_avg_volt;
