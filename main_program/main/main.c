@@ -89,7 +89,7 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
     int t = 0;
     double timestep = 0;
     double fall_start_time_ms = AUDIO_RISE_TIME_MS+WAVEFORM_LEN+AUDIO_FALL_TIME_MS;
-    double amplitude;
+    double cos2_amplitude_multiplier;
     double R_amplitude_1 = 1;
     double R_amplitude_2 = dBFS_to_linear(R_VOL_DBFS_2);
     double L_amplitude_1 = dBFS_to_linear(L_VOL_DBFS_1);
@@ -110,32 +110,35 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
         //Define timestep
         timestep = (double)(t) / (double)SAMPLE_RATE;
         
-        //Setup amplitude multipliers for cos^2 ramp
+        //Setup cos2_amp_factor multipliers for cos^2 ramp
         if (timestep < AUDIO_RISE_TIME_MS){
-            amplitude = pow( cos( (M_PI/2) * (timestep / AUDIO_RISE_TIME_MS) ) , 2);
+            cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (timestep / AUDIO_RISE_TIME_MS) ) , 2);
         }
         else if (timestep < AUDIO_RISE_TIME_MS+WAVEFORM_LEN){
-            amplitude = 1;
+            cos2_amplitude_multiplier = 1;
         }
         else if (timestep < fall_start_time_ms){
-            amplitude = pow( cos( (M_PI/2) * (AUDIO_FALL_TIME_MS-(timestep-fall_start_time_ms) / AUDIO_FALL_TIME_MS) ) , 2);
+            cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (AUDIO_FALL_TIME_MS-(timestep-fall_start_time_ms) / AUDIO_FALL_TIME_MS) ) , 2);
+        }
+        else{
+            cos2_amplitude_multiplier = 0;
         }
 
 
         //Create right-side sine wave
-        sine_point_R_1   = amplitude * R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * timestep);
-        sine_point_R_2   = amplitude * R_amplitude_2 * sin(2 * M_PI * R_FREQUENCY_2 * timestep);
+        sine_point_R_1   = cos2_amplitude_multiplier * R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * timestep);
+        sine_point_R_2   = cos2_amplitude_multiplier * R_amplitude_2 * sin(2 * M_PI * R_FREQUENCY_2 * timestep);
         
-        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2) / (amplitude * (R_amplitude_1 + R_amplitude_2));
+        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2) / (cos2_amplitude_multiplier * (R_amplitude_1 + R_amplitude_2));
 
         if(sine_point_R_tot >= BITS_IN_32BIT) printf("Error with Right side sine");
 
 
         //Create left-side sine wave
-        sine_point_L_1   = amplitude * L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * timestep);  // Use 2 * PI for full sine wave cycle
-        sine_point_L_2   = amplitude * L_amplitude_2 * sin(2 * M_PI * L_FREQUENCY_2 * timestep);
+        sine_point_L_1   = cos2_amplitude_multiplier * L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * timestep);  // Use 2 * PI for full sine wave cycle
+        sine_point_L_2   = cos2_amplitude_multiplier * L_amplitude_2 * sin(2 * M_PI * L_FREQUENCY_2 * timestep);
     
-        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2) / (amplitude * (L_amplitude_1 + L_amplitude_2));
+        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2) / (cos2_amplitude_multiplier * (L_amplitude_1 + L_amplitude_2));
 
         if(sine_point_L_tot >= BITS_IN_32BIT) printf("Error with Left side sine");
 
