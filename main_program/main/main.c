@@ -324,7 +324,7 @@ static void i2s_play_task(void * user_ctx){
         audio_pos++;
         buff_pos++;
     }
-    buff_pos = 0;
+    buff_pos = 0;                           //Set to 0 now in case I forget to this this later:)
 
     do{
         ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, buff_len, &words_written));
@@ -346,7 +346,7 @@ static void i2s_play_task(void * user_ctx){
                 audio_pos++;
                 buff_pos++;
             }
-            buff_pos = 0;
+            buff_pos = 0;                           //Set to 0 now in case I forget to this this later:)
 
             i2s_channel_write(i2s_chan, write_buff_ptr, buff_len, &words_written, portMAX_DELAY);   //Write the new buffer to the i2s bus
         }
@@ -355,15 +355,14 @@ static void i2s_play_task(void * user_ctx){
 
         audio_pos     = 0;                  //Prepare for next ISR to trigger by resetting audio_pos to 0
         words_written = 0;                  //words_written to 0
-        
 
-        buff_pos = 0;
+        buff_pos = 0;           
         while (buff_pos < buff_len){            //Filling up a new buffer
             write_buff_ptr[audio_pos] = audio_data_ptr[audio_pos];
             audio_pos++;
             buff_pos++;
         }
-        buff_pos = 0;
+        buff_pos = 0;                       //Set to 0 now in case I forget to this this later:)
 
         do{
             ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, buff_len, &words_written)); //And pre-loading the buffer to transmit instantly upon the next ISR call
