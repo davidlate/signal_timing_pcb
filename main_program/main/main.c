@@ -112,19 +112,19 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
         timestep = (double)(t) / (double)SAMPLE_RATE;
         
         cos2_amplitude_multiplier = 1;
-        // //Setup cos2_amp_factor multipliers for cos^2 ramp
-        // if (timestep < AUDIO_RISE_TIME_MS){
-        //     cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (timestep / AUDIO_RISE_TIME_MS) ) , 2);
-        // }
-        // else if (timestep < AUDIO_RISE_TIME_MS+WAVEFORM_LEN){
-        //     cos2_amplitude_multiplier = 1;
-        // }
-        // else if (timestep < fall_start_time_ms){
-        //     cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (AUDIO_FALL_TIME_MS-(timestep-fall_start_time_ms) / AUDIO_FALL_TIME_MS) ) , 2);
-        // }
-        // else{
-        //     cos2_amplitude_multiplier = 0;
-        // }
+        //Setup cos2_amp_factor multipliers for cos^2 ramp
+        if (timestep < AUDIO_RISE_TIME_MS){
+            cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (timestep / AUDIO_RISE_TIME_MS) ) , 2);
+        }
+        else if (timestep < AUDIO_RISE_TIME_MS+WAVEFORM_LEN){
+            cos2_amplitude_multiplier = 1;
+        }
+        else if (timestep < fall_start_time_ms){
+            cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (AUDIO_FALL_TIME_MS-(timestep-fall_start_time_ms) / AUDIO_FALL_TIME_MS) ) , 2);
+        }
+        else{
+            cos2_amplitude_multiplier = 0;
+        }
 
 
         //Create right-side sine wave
