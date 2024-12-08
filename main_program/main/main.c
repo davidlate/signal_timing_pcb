@@ -55,8 +55,8 @@ the BCLK and WS signal
 #define AUDIO_PERIOD_MS             1000        //Period that audio plays
 
 #define WAVEFORM_LEN                SAMPLE_RATE/1000*(DURATION_MS+AUDIO_RISE_TIME_MS+AUDIO_FALL_TIME_MS)*2
-#define NUM_DMA_BUFF                6
-#define SIZE_DMA_BUFF               500
+#define NUM_DMA_BUFF                5
+#define SIZE_DMA_BUFF               1500
 #define I2S_BUFF_LEN                NUM_DMA_BUFF * SIZE_DMA_BUFF
 
 #define MAX_VOLUME_LINEAR_PERCENT   100
@@ -343,7 +343,6 @@ static void i2s_play_task(void * user_ctx){
     }
     while(words_written == words_to_write);
 
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
 
     /*This is the main part of the task that will run continuously, blocking until the ISR is triggered*/
 
@@ -366,7 +365,7 @@ static void i2s_play_task(void * user_ctx){
                 }
                 buff_pos = 0;                                                   //Set to 0 now in case I forget to this this later:)            
                                                                                 //Write the new buffer to the i2s bus
-                // i2s_channel_write(i2s_chan, write_buff_ptr, buff_len, &words_written, portMAX_DELAY); 
+                // i2s_channel_write(i2s_chan, write_buff_ptr, words_to_write, &words_written, portMAX_DELAY); 
             }
             printf("Audio pos: %i | Audio len: %i\n", audio_pos, audio_len);
 
