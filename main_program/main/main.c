@@ -50,13 +50,13 @@ the BCLK and WS signal
 
 #define SAMPLE_RATE                 96000
 #define DURATION_MS                 50
-#define AUDIO_RISE_TIME_MS          1
-#define AUDIO_FALL_TIME_MS          1
-#define AUDIO_PERIOD_MS             200        //Period that audio plays
+#define AUDIO_RISE_TIME_MS          2
+#define AUDIO_FALL_TIME_MS          2
+#define AUDIO_PERIOD_MS             500        //Period that audio plays
 
 #define WAVEFORM_LEN                SAMPLE_RATE/1000*(DURATION_MS+AUDIO_RISE_TIME_MS+AUDIO_FALL_TIME_MS)*2
 #define NUM_DMA_BUFF                5
-#define SIZE_DMA_BUFF               2000
+#define SIZE_DMA_BUFF               500
 #define I2S_BUFF_LEN                NUM_DMA_BUFF * SIZE_DMA_BUFF
 
 #define MAX_VOLUME_LINEAR_PERCENT   100
@@ -312,7 +312,6 @@ static void i2s_play_task(void * user_ctx){
     int32_t*           write_buff_ptr   = i2s_def_ptr->audio_write_buffer_ptr;
     int32_t*           audio_data_ptr   = i2s_def_ptr->audio_waveform_data_ptr;
     double*            volume_lin_ptr   = i2s_def_ptr->audio_volume_linear_ptr;
-
     size_t             audio_pos        = i2s_def_ptr->audio_samples_position;
     size_t             buff_pos         = i2s_def_ptr->buffer_position;
     size_t             buff_len         = i2s_def_ptr->length_of_audio_write_buffer;
@@ -321,26 +320,33 @@ static void i2s_play_task(void * user_ctx){
     i2s_chan_handle_t  i2s_chan         = i2s_def_ptr->chan;
     QueueHandle_t      i2s_queue        = i2s_def_ptr->i2s_queue;
     size_t             words_to_write   = 0;
+    size_t             bytes_to_write   = 0;
+    size_t             bytes_written    = 0;
     gptimer_handle_t   gptimer_handle   = i2s_def_ptr->gptimer_handle;
 
     i2s_passthrough_struct passthrough_data;
 
     audio_pos     = 0;                                                  //Prepare for next ISR to trigger by resetting audio_pos to 0
     words_written = 0;                                                  //words_written to 0
-    buff_pos      = 0;           
+    words_to_write = 0;
+
+    buff_pos = 0;
 
     while (buff_pos < buff_len && audio_pos < audio_len){        //Filling up a new buffer
-        write_buff_ptr[audio_pos] = *volume_lin_ptr * audio_data_ptr[audio_pos];
+        write_buff_ptr[buff_pos] = (int32_t)(*volume_lin_ptr * audio_data_ptr[audio_pos]);
         audio_pos++;
         buff_pos++;
         words_to_write++;
     }
-    buff_pos = 0;                       //Set to 0 now in case I forget to this this later:)
 
-    do{
-        ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, words_to_write, &words_written)); //And pre-loading the buffer to transmit instantly upon the next ISR call
+    buff_pos = 0;                       //Set to 0 now in case I forget to this this later:)
+    bytes_to_write = words_to_write*sizeof(int32_t);
+    bytes_written = 0;
+    do{     //change the size of the words_to_write arg
+        ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written)); //And pre-loading the buffer to transmit instantly upon the next ISR call
+        bytes_to_write -= bytes_written;
     }
-    while(words_written == words_to_write);
+    while(bytes_to_write>0 && bytes_written>0);
 
 
     /*This is the main part of the task that will run continuously, blocking until the ISR is triggered*/
@@ -348,48 +354,62 @@ static void i2s_play_task(void * user_ctx){
     while (true){
         if(xQueueReceive(i2s_queue, &passthrough_data, portMAX_DELAY)){     //Wait forever until audio ISR triggers
 
-            // printf("\nISR triggered and task now running\n");
+            printf("\nISR triggered and task now running\n");
         
 
-            //THE ISSUE IS WITH THIS FUNCTION!!
+            // i2s_channel_enable(i2s_chan);
             i2s_channel_ISR_enable_finish(i2s_chan);                            //Keep freeRTOS happy and finish what i2s_channel_ISR_enable started in the ISR
     
+ 
             while(audio_pos < audio_len){                                       //While the audio has not been fully transmitted (position in the audio file is less than the audio file's length)
                 buff_pos = 0;
                 words_to_write = 0;
-            printf("\nHERE | Audio pos: %i | Audio len: %i |Words Written Last time: %i \n", audio_pos, audio_len, words_written);
+            // printf("\nHERE | Audio pos: %i | Audio len: %i |Words Written Last time: %i \n", audio_pos, audio_len, words_written);
                 while (buff_pos < buff_len && audio_pos < audio_len){                                    //overwrite to create a new buffer of the next buff_len number of audio samples
-                    write_buff_ptr[buff_pos] = *volume_lin_ptr * audio_data_ptr[audio_pos];
+                    write_buff_ptr[buff_pos] = (int32_t)(*volume_lin_ptr * audio_data_ptr[audio_pos]);
                     audio_pos++;
                     buff_pos++;
                     words_to_write++;
                 }
-                buff_pos = 0;                                                   //Set to 0 now in case I forget to this this later:)            
-                                                                                //Write the new buffer to the i2s bus
-                // i2s_channel_write(i2s_chan, write_buff_ptr, words_to_write*sizeof(int32_t), &words_written, portMAX_DELAY); 
-            }
-            printf("Audio pos: %i | Audio len: %i\n | Words Written Last time: %i \n", audio_pos, audio_len, words_written);
+                buff_pos = 0;
+                bytes_to_write = words_to_write * sizeof(int32_t);                                              //Set to 0 now in case I forget to this this later:)            
+                bytes_written  = 0;                                                                // Write the new buffer to the i2s bus
+                
+                i2s_channel_write(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written, portMAX_DELAY); 
+                bytes_to_write -= bytes_written;
 
+                printf("i2swrite: Audio pos: %i | Audio len: %i\n | bytes to write: %i | bytes written: %i\n", audio_pos, audio_len, bytes_to_write, bytes_written);
+            }
 
             i2s_channel_disable(i2s_chan);                                      //Audio file has been fully transmitted.  Disable the channel to allow new data to be preloaded
 
             audio_pos     = 0;                                                  //Prepare for next ISR to trigger by resetting audio_pos to 0
             words_written = 0;                                                  //words_written to 0
+            words_to_write = 0;
 
-            buff_pos = 0;           
+            buff_pos = 0;
+            printf("Buff_pos: %i | buff_len: %i | audio pos: %i | audio len: %i\n", buff_pos, buff_len, audio_pos, audio_len);           
+
             while (buff_pos < buff_len && audio_pos < audio_len){        //Filling up a new buffer
-                write_buff_ptr[audio_pos] = *volume_lin_ptr * audio_data_ptr[audio_pos];
+                write_buff_ptr[buff_pos] = (int32_t)(*volume_lin_ptr * audio_data_ptr[audio_pos]);
                 audio_pos++;
                 buff_pos++;
                 words_to_write++;
             }
-            buff_pos = 0;                       //Set to 0 now in case I forget to this this later:)
+            printf("Buff_pos: %i | buff_len: %i | audio pos: %i | audio len: %i | Waveform_LEN: %i | words_to_write: %i\n", buff_pos, buff_len, audio_pos, audio_len, WAVEFORM_LEN, words_to_write);           
 
-            do{     //change the siz of the words_to_write arg
-                ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, words_to_write*sizeof(int32_t), &words_written)); //And pre-loading the buffer to transmit instantly upon the next ISR call
-                printf("Words written: %i | words_to_write: %i\n", words_written, words_to_write);
+            buff_pos = 0;                       //Set to 0 now in case I forget to this this later:)
+            bytes_to_write = words_to_write*sizeof(int32_t);
+            printf("Bytes to write: %i\n", bytes_to_write);
+            bytes_written = 0;
+            do{     //change the size of the words_to_write arg
+                ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written)); //And pre-loading the buffer to transmit instantly upon the next ISR call
+                bytes_to_write -= bytes_written;
+                printf("bytes written: %i | bytes_to_write: %i\n", bytes_written, bytes_to_write);
             }
-            while(words_written == words_to_write);
+            while(bytes_to_write>0 && bytes_written>0);
+            printf("\n\n\n");
+
         }
     }
 }
@@ -438,8 +458,8 @@ void dac_read_vol_battery_task(void * audio_volume1){
 
         double dBFS = -(voltage_fraction-1) * MIN_VOLUME_dBFS;
         double audio_vol_linear = pow(10.0, dBFS / 20.0);
-        printf("dBFS: %.1f dB \n", dBFS);
-        printf("Audio Linear Percent: %.1f%%", audio_vol_linear*100);
+        // printf("dBFS: %.1f dB \n", dBFS);
+        // printf("Audio Linear Percent: %.1f%%", audio_vol_linear*100);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -497,7 +517,7 @@ void app_main(void)
 
     sound_struct i2s_waveform_definition_struct = {
         .audio_waveform_data_ptr        = wave,
-        .length_of_audio_waveform       = WAVEFORM_SIZE,
+        .length_of_audio_waveform       = WAVEFORM_LEN,
         .length_of_audio_write_buffer   = I2S_BUFF_LEN,
         .audio_write_buffer_ptr         = w_buf,
         .audio_volume_linear_ptr        = &volume_frac,
