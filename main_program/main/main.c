@@ -49,10 +49,10 @@ the BCLK and WS signal
 #define VOL_PERCENT                 10
 
 #define SAMPLE_RATE                 96000
-#define DURATION_MS                 50
+#define DURATION_MS                 300
 #define AUDIO_RISE_TIME_MS          2
 #define AUDIO_FALL_TIME_MS          2
-#define AUDIO_PERIOD_MS             500        //Period that audio plays
+#define AUDIO_PERIOD_MS             1000        //Period that audio plays
 
 #define WAVEFORM_LEN                SAMPLE_RATE/1000*(DURATION_MS+AUDIO_RISE_TIME_MS+AUDIO_FALL_TIME_MS)*2
 #define NUM_DMA_BUFF                5
@@ -66,21 +66,28 @@ static i2s_chan_handle_t                tx_chan;        // I2S tx channel handle
 
 
 
-int R_FREQUENCY_1          = 2000;
-int R_FREQUENCY_2          = 0;
-
-int R_VOL_DBFS_2           = -120;
-
-
-int L_FREQUENCY_1          = 3000;
-int L_FREQUENCY_2          = 0;
-
-int L_VOL_DBFS_1           = 0;
-int L_VOL_DBFS_2           = -120;
+double R_FREQUENCY_1          = 2093.00;    //C Octave 7
+double R_FREQUENCY_2          = 0;    //E Octave 7
+double R_FREQUENCY_3          = 0;    //G Octave 7
 
 
-double dBFS_to_linear(int dBFS){ 
-    double linear = pow(10, (double)dBFS/20);
+// double R_VOL_DBFS_2           = 0;
+// double R_VOL_DBFS_3           = 0;
+
+
+double L_FREQUENCY_1          = 3000;
+double L_FREQUENCY_2          = 0;
+double L_FREQUENCY_3          = 0;
+
+
+// double L_VOL_DBFS_1           = 0;
+// double L_VOL_DBFS_2           = 0;
+// double L_VOL_DBFS_3           = 0;
+
+
+
+double dBFS_to_linear(double dBFS){ 
+    double linear = pow(10, dBFS/20);
     return linear;
 }
 
@@ -92,16 +99,21 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
     double fall_start_time_ms = AUDIO_RISE_TIME_MS+WAVEFORM_LEN+AUDIO_FALL_TIME_MS;
     double cos2_amplitude_multiplier;
     double R_amplitude_1 = 1;
-    double R_amplitude_2 = dBFS_to_linear(R_VOL_DBFS_2);
-    double L_amplitude_1 = dBFS_to_linear(L_VOL_DBFS_1);
-    double L_amplitude_2 = dBFS_to_linear(L_VOL_DBFS_2);
+    double R_amplitude_2 = 1;
+    double R_amplitude_3 = 1;
+
+    double L_amplitude_1 = 1;
+    double L_amplitude_2 = 1;
+    double L_amplitude_3 = 1;
 
     double sine_point_R_1;
     double sine_point_R_2;
+    double sine_point_R_3;
     double sine_point_R_tot;
 
     double sine_point_L_1;
     double sine_point_L_2;
+    double sine_point_L_3;
     double sine_point_L_tot;
 
 
@@ -130,8 +142,9 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
         //Create right-side sine wave
         sine_point_R_1   = cos2_amplitude_multiplier * R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * timestep);
         sine_point_R_2   = cos2_amplitude_multiplier * R_amplitude_2 * sin(2 * M_PI * R_FREQUENCY_2 * timestep);
-        
-        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2) / (cos2_amplitude_multiplier * (R_amplitude_1 + R_amplitude_2));
+        sine_point_R_3   = cos2_amplitude_multiplier * R_amplitude_3 * sin(2 * M_PI * R_FREQUENCY_3 * timestep);
+
+        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2 + sine_point_R_3) / ((R_amplitude_1 + R_amplitude_2 + R_amplitude_3));
 
         if(sine_point_R_tot >= BITS_IN_32BIT) printf("Error with Right side sine");
 
@@ -139,8 +152,9 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
         //Create left-side sine wave
         sine_point_L_1   = cos2_amplitude_multiplier * L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * timestep);  // Use 2 * PI for full sine wave cycle
         sine_point_L_2   = cos2_amplitude_multiplier * L_amplitude_2 * sin(2 * M_PI * L_FREQUENCY_2 * timestep);
-    
-        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2) / (cos2_amplitude_multiplier * (L_amplitude_1 + L_amplitude_2));
+        sine_point_L_3   = cos2_amplitude_multiplier * L_amplitude_3 * sin(2 * M_PI * L_FREQUENCY_3 * timestep);
+
+        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2 + sine_point_L_3) / (cos2_amplitude_multiplier * (L_amplitude_1 + L_amplitude_2 + L_amplitude_3));
 
         if(sine_point_L_tot >= BITS_IN_32BIT) printf("Error with Left side sine");
 
@@ -329,11 +343,11 @@ static void i2s_play_task(void * user_ctx){
     audio_pos     = 0;                                                  //Prepare for next ISR to trigger by resetting audio_pos to 0
     words_written = 0;                                                  //words_written to 0
     words_to_write = 0;
-
     buff_pos = 0;
+    double vol_lin = *volume_lin_ptr;
 
     while (buff_pos < buff_len && audio_pos < audio_len){        //Filling up a new buffer
-        write_buff_ptr[buff_pos] = (int32_t)(*volume_lin_ptr * audio_data_ptr[audio_pos]);
+        write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
         audio_pos++;
         buff_pos++;
         words_to_write++;
@@ -357,16 +371,15 @@ static void i2s_play_task(void * user_ctx){
             printf("\nISR triggered and task now running\n");
         
 
-            // i2s_channel_enable(i2s_chan);
             i2s_channel_ISR_enable_finish(i2s_chan);                            //Keep freeRTOS happy and finish what i2s_channel_ISR_enable started in the ISR
     
  
             while(audio_pos < audio_len){                                       //While the audio has not been fully transmitted (position in the audio file is less than the audio file's length)
                 buff_pos = 0;
                 words_to_write = 0;
-            // printf("\nHERE | Audio pos: %i | Audio len: %i |Words Written Last time: %i \n", audio_pos, audio_len, words_written);
+                vol_lin = *volume_lin_ptr;
                 while (buff_pos < buff_len && audio_pos < audio_len){                                    //overwrite to create a new buffer of the next buff_len number of audio samples
-                    write_buff_ptr[buff_pos] = (int32_t)(*volume_lin_ptr * audio_data_ptr[audio_pos]);
+                    write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
                     audio_pos++;
                     buff_pos++;
                     words_to_write++;
@@ -389,9 +402,9 @@ static void i2s_play_task(void * user_ctx){
 
             buff_pos = 0;
             printf("Buff_pos: %i | buff_len: %i | audio pos: %i | audio len: %i\n", buff_pos, buff_len, audio_pos, audio_len);           
-
+            vol_lin = *volume_lin_ptr;
             while (buff_pos < buff_len && audio_pos < audio_len){        //Filling up a new buffer
-                write_buff_ptr[buff_pos] = (int32_t)(*volume_lin_ptr * audio_data_ptr[audio_pos]);
+                write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
                 audio_pos++;
                 buff_pos++;
                 words_to_write++;
