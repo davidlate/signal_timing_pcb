@@ -30,64 +30,48 @@
 //I2S DEFINITIONS__________________________________________________________________I2S START_______________________I2S START___________________________________
 
 
-#define _USE_MATH_DEFINES
+const int VOL_PIN      =       GPIO_NUM_9;
+const int XSMT_PIN     =       GPIO_NUM_4;
+const int I2S_WS_PIN   =       1;      //LCK, LRC, 13 I2S word select io number
+const int I2S_DOUT_PIN =       2;    //DIN, 12 I2S data out io number
+const int I2S_BCK_PIN  =       3;      //BCK 11  I2S bit clock io number
 
-/* Set 1 to allocate rx & tx channels in duplex mode on a same I2S controller, they will share 
-the BCLK and WS signal
- * Set 0 to allocate rx & tx channels in simplex mode, these two channels will be totally separated,
- * Specifically, due to the hardware limitation, the simplex rx & tx channels can't be registered on the same controllers on ESP32 and ESP32-S2,
- * and ESP32-S2 has only one I2S controller, so it can't allocate two simplex channels */
-#define EXAMPLE_I2S_DUPLEX_MODE         CONFIG_USE_DUPLEX
+const int32_t BITS_IN_32BIT = 2147483647;       //2^31 - 1
+const float   VOL_PERCENT   = 100.00;
 
-#define VOL_PIN                     GPIO_NUM_9
+const double SAMPLE_RATE        = 96000.00;
+const double DURATION_MS        = 10.00;
+const double AUDIO_RISE_TIME_MS = 2.0;
+const double AUDIO_FALL_TIME_MS = 2.0;
 
-#define EXAMPLE_STD_WS_IO1          1      //LCK, LRC, 13 I2S word select io number
-#define EXAMPLE_STD_DOUT_IO1        2     //DIN, 12 I2S data out io number
-#define EXAMPLE_STD_BCLK_IO1        3      //BCK 11  I2S bit clock io number
+const double AUDIO_PERIOD_MS    = 200.0;        //Period that audio plays
+const double DITHER_TIME_MS     = (AUDIO_PERIOD_MS - (DURATION_MS+AUDIO_RISE_TIME_MS+AUDIO_FALL_TIME_MS))/2 - 10;
 
-#define BITS_IN_32BIT               2147483647       //2^31 - 1
-#define VOL_PERCENT                 10
+const double WAVEFORM_LEN  = SAMPLE_RATE/1000*(DURATION_MS+AUDIO_RISE_TIME_MS+AUDIO_FALL_TIME_MS+2*DITHER_TIME_MS)*2;
+const double NUM_DMA_BUFF  = 5;
+const double SIZE_DMA_BUFF = 500;
+const double I2S_BUFF_LEN  = NUM_DMA_BUFF * SIZE_DMA_BUFF;
 
-#define SAMPLE_RATE                 96000
-#define DURATION_MS                 300
-#define AUDIO_RISE_TIME_MS          2
-#define AUDIO_FALL_TIME_MS          2
-#define AUDIO_PERIOD_MS             1000        //Period that audio plays
-
-#define WAVEFORM_LEN                SAMPLE_RATE/1000*(DURATION_MS+AUDIO_RISE_TIME_MS+AUDIO_FALL_TIME_MS)*2
-#define NUM_DMA_BUFF                5
-#define SIZE_DMA_BUFF               500
-#define I2S_BUFF_LEN                NUM_DMA_BUFF * SIZE_DMA_BUFF
-
-#define MAX_VOLUME_LINEAR_PERCENT   100
-#define MIN_VOLUME_dBFS             -60
+const float MAX_VOLUME_LINEAR_PERCENT =  100.0;
+const float MIN_VOLUME_dBFS =            -60.0;
 
 static i2s_chan_handle_t                tx_chan;        // I2S tx channel handler
 
+//-----------------------------------------------------------------------------------------------------------------------------------------------
+double R_FREQUENCY_1          = 500;    //C Octave 7
+double R_FREQUENCY_2          = 0;
+double R_FREQUENCY_3          = 0;
+
+double L_FREQUENCY_1          = 2000;
+double L_FREQUENCY_2          = 3000;
+double L_FREQUENCY_3          = 500;
 
 
-double R_FREQUENCY_1          = 2093.00;    //C Octave 7
-double R_FREQUENCY_2          = 0;    //E Octave 7
-double R_FREQUENCY_3          = 0;    //G Octave 7
-
-
-// double R_VOL_DBFS_2           = 0;
-// double R_VOL_DBFS_3           = 0;
-
-
-double L_FREQUENCY_1          = 3000;
-double L_FREQUENCY_2          = 0;
-double L_FREQUENCY_3          = 0;
-
-
-// double L_VOL_DBFS_1           = 0;
-// double L_VOL_DBFS_2           = 0;
-// double L_VOL_DBFS_3           = 0;
 
 
 
 double dBFS_to_linear(double dBFS){ 
-    double linear = pow(10, dBFS/20);
+    double linear = pow(10.0, dBFS/20.0);
     return linear;
 }
 
@@ -95,9 +79,11 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
 
     // Populate the waveform array with sine values
     int t = 0;
-    double timestep = 0;
-    double fall_start_time_ms = AUDIO_RISE_TIME_MS+WAVEFORM_LEN+AUDIO_FALL_TIME_MS;
-    double cos2_amplitude_multiplier;
+    int u = 0;
+    double total_time_s = 0;
+    double audio_time_s = 0;
+    
+    double cos2_amplitude_multiplier = 1;
     double R_amplitude_1 = 1;
     double R_amplitude_2 = 1;
     double R_amplitude_3 = 1;
@@ -106,65 +92,91 @@ void create_sine_wave(int32_t * waveform, int L_FREQUENCY, int R_FREQUENCY) {
     double L_amplitude_2 = 1;
     double L_amplitude_3 = 1;
 
-    double sine_point_R_1;
-    double sine_point_R_2;
-    double sine_point_R_3;
-    double sine_point_R_tot;
+    double sine_point_R_1 = 0;
+    double sine_point_R_2 = 0;
+    double sine_point_R_3 = 0;
+    double sine_point_R_tot = 0;
 
-    double sine_point_L_1;
-    double sine_point_L_2;
-    double sine_point_L_3;
-    double sine_point_L_tot;
+    double sine_point_L_1 = 0;
+    double sine_point_L_2 = 0;
+    double sine_point_L_3 = 0;
+    double sine_point_L_tot = 0;
+
+    int32_t int_point_L = 0;
+    int32_t int_point_R = 0;
 
 
     //cos^2 rise fall
+    double waveform_start_s                     = 0;
+    double audio_start_s                        = (double)DITHER_TIME_MS/(double)1000;
+    double audio_full_scale_start_s             = audio_start_s + (double)AUDIO_RISE_TIME_MS/(double)1000;
+    double audio_full_scale_end_s               = audio_full_scale_start_s + (double)DURATION_MS/(double)1000;
+    double audio_end_s                          = audio_full_scale_end_s + (double)AUDIO_FALL_TIME_MS/(double)1000;
+    double waveform_end_s                       = audio_end_s + (double)DITHER_TIME_MS/(double)1000;
+    double rise_fraction                        = 0;
+    double fall_fraction                        = 1;
+
+
+    printf("waveform start: %.3fs\n audio_start_s: %.3fs\n", waveform_start_s, audio_start_s);
+    printf("audio full scale start time: %.3f s\n audio full scale end time: %.3fs\n", audio_full_scale_start_s, audio_full_scale_end_s);
+    printf("audio_end: %.3fs\n waveform end time: %.3fs\n", audio_end_s, waveform_end_s);
+    printf("WAVEFORM LEN: %.3f | Waveform time: %.3fms\n", WAVEFORM_LEN, WAVEFORM_LEN / 96.00 /2.00 );
+
 
     for (int i = 0; i < WAVEFORM_LEN; i+=2) {
         //Define timestep
-        timestep = (double)(t) / (double)SAMPLE_RATE;
+        total_time_s = (double)(t) / (double)SAMPLE_RATE;
+
+        if (total_time_s > audio_start_s && total_time_s < audio_end_s){
+
+            audio_time_s = (double)(u) / (double)SAMPLE_RATE;
+            rise_fraction = audio_time_s / (AUDIO_RISE_TIME_MS/1000);
+            fall_fraction = 1-((total_time_s - audio_full_scale_end_s) / (AUDIO_FALL_TIME_MS/1000));
+
+            if (total_time_s < audio_full_scale_start_s){
+                cos2_amplitude_multiplier = 1 - pow(cos(rise_fraction*M_PI/2),2);
+            }
+            else if (total_time_s > audio_full_scale_end_s){
+                cos2_amplitude_multiplier = 1 - pow(cos(fall_fraction*M_PI/2),2);
+            }
+            else{
+                cos2_amplitude_multiplier = 1;
+            }
         
-        cos2_amplitude_multiplier = 1;
-        //Setup cos2_amp_factor multipliers for cos^2 ramp
-        if (timestep < AUDIO_RISE_TIME_MS){
-            cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (timestep / AUDIO_RISE_TIME_MS) ) , 2);
+            //Create right-side sine wave
+            sine_point_R_1   = cos2_amplitude_multiplier * R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * audio_time_s);
+
+            if(sine_point_R_tot >= BITS_IN_32BIT) printf("Error with Right side sine");
+
+            //Create left-side sine wave
+            sine_point_L_1   = cos2_amplitude_multiplier * L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * audio_time_s);  // Use 2 * PI for full sine wave cycle
+
+            if(sine_point_L_tot >= BITS_IN_32BIT) printf("Error with Left side sine");
+
+
+            sine_point_L_tot = (sine_point_L_1) / ((L_amplitude_1));
+            sine_point_R_tot = (sine_point_R_1) / ((R_amplitude_1));
+                        
+
+            int_point_L = (int32_t)(sine_point_L_tot*BITS_IN_32BIT);
+            int_point_R = (int32_t)(sine_point_R_tot*BITS_IN_32BIT);
+            u++;
+
         }
-        else if (timestep < AUDIO_RISE_TIME_MS+WAVEFORM_LEN){
-            cos2_amplitude_multiplier = 1;
-        }
-        else if (timestep < fall_start_time_ms){
-            cos2_amplitude_multiplier = pow( cos( (M_PI/2) * (AUDIO_FALL_TIME_MS-(timestep-fall_start_time_ms) / AUDIO_FALL_TIME_MS) ) , 2);
-        }
+
         else{
-            cos2_amplitude_multiplier = 0;
+            int_point_L = (int32_t)0;
+            int_point_R = (int32_t)0;            
         }
 
-
-        //Create right-side sine wave
-        sine_point_R_1   = cos2_amplitude_multiplier * R_amplitude_1 * sin(2 * M_PI * R_FREQUENCY_1 * timestep);
-        sine_point_R_2   = cos2_amplitude_multiplier * R_amplitude_2 * sin(2 * M_PI * R_FREQUENCY_2 * timestep);
-        sine_point_R_3   = cos2_amplitude_multiplier * R_amplitude_3 * sin(2 * M_PI * R_FREQUENCY_3 * timestep);
-
-        sine_point_R_tot = (sine_point_R_1 + sine_point_R_2 + sine_point_R_3) / ((R_amplitude_1 + R_amplitude_2 + R_amplitude_3));
-
-        if(sine_point_R_tot >= BITS_IN_32BIT) printf("Error with Right side sine");
-
-
-        //Create left-side sine wave
-        sine_point_L_1   = cos2_amplitude_multiplier * L_amplitude_1 * sin(2 * M_PI * L_FREQUENCY_1 * timestep);  // Use 2 * PI for full sine wave cycle
-        sine_point_L_2   = cos2_amplitude_multiplier * L_amplitude_2 * sin(2 * M_PI * L_FREQUENCY_2 * timestep);
-        sine_point_L_3   = cos2_amplitude_multiplier * L_amplitude_3 * sin(2 * M_PI * L_FREQUENCY_3 * timestep);
-
-        sine_point_L_tot = (sine_point_L_1 + sine_point_L_2 + sine_point_L_3) / (cos2_amplitude_multiplier * (L_amplitude_1 + L_amplitude_2 + L_amplitude_3));
-
-        if(sine_point_L_tot >= BITS_IN_32BIT) printf("Error with Left side sine");
-
-        int32_t int_point_L = (int32_t)(sine_point_L_tot*BITS_IN_32BIT);
-        int32_t int_point_R = (int32_t)(sine_point_R_tot*BITS_IN_32BIT);
-
+        int_point_L |= 1;    //Adding dither by setting Least Significant Bit of waveform to 1
+        int_point_R |= 1;    //This is required to prevent the PCM5102A from auto-muting which causes pops
+                             //Probably not needed by other cards
         waveform[i]   = int_point_L;
         waveform[i+1] = int_point_R;
         t++;
     }
+
     printf("Made it through sine wave function\n");
 }
 
@@ -213,9 +225,9 @@ static void i2s_channel_setup(i2s_chan_handle_t * tx_chan_ptr)
                 },
     .gpio_cfg = {
         .mclk = I2S_GPIO_UNUSED,
-        .bclk = EXAMPLE_STD_BCLK_IO1,
-        .ws = EXAMPLE_STD_WS_IO1,
-        .dout = EXAMPLE_STD_DOUT_IO1,
+        .bclk = I2S_BCK_PIN,
+        .ws = I2S_WS_PIN,
+        .dout = I2S_DOUT_PIN,
         .din = I2S_GPIO_UNUSED,
         .invert_flags = {
             .mclk_inv = false,
@@ -232,39 +244,6 @@ static void i2s_channel_setup(i2s_chan_handle_t * tx_chan_ptr)
       
 
 }
-
-
-
-static void i2s_write_function(void *waveform, int32_t * w_buf, int32_t *write_time_us, int32_t start_time_us, double * volume_frac)
-{    
-
-    int32_t *audio_waveform = (int32_t*)waveform;           //Cast the waveform argumen to a 32-bit int pointer
-
-    size_t WAVEFORM_SIZE = (int32_t)WAVEFORM_LEN * sizeof(int32_t);
-
-    size_t w_bytes = I2S_BUFF_LEN;                         //Create variable to track how many bytes are written to the I2S DMA buffer
-    size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
-
-    double dBFS = -(*volume_frac-1) * MIN_VOLUME_dBFS;
-    double audio_vol_linear = pow(10.0, dBFS / 20.0);
-
-    /*Here we iterate through each index in the audio waveform, and assign the value to the wbuf*/
-    while (audio_samples_pos<WAVEFORM_LEN) {
-        w_buf[audio_samples_pos] = audio_vol_linear*(audio_waveform[audio_samples_pos]);
-        audio_samples_pos++;
-        }
-
-    /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
-    we would use the wbytes variable to move along wbuf and start a new write at the position where the 
-    last one left off.  That's not the case here, though*/
-    // for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
-    *write_time_us = esp_timer_get_time() - start_time_us;
-    i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS);
-
-    // };    
-
-}
-
 
 
 
@@ -301,7 +280,8 @@ static bool IRAM_ATTR i2s_enable_gptimer_callback(gptimer_handle_t timer, const 
 {
 
     sound_struct *i2s_def_ptr = (sound_struct*)user_ctx;    //Cast the argument pointer into a sound_struct type
-
+    
+    gpio_set_level(XSMT_PIN, 1);
     i2s_channel_ISR_enable(i2s_def_ptr->chan);              //Begin I2S transmission using custom driver function.  See update i2s_common.c and .h in this repo.  
 
     BaseType_t         high_task_awoken  = pdFALSE;
@@ -333,7 +313,7 @@ static void i2s_play_task(void * user_ctx){
     size_t             audio_len        = i2s_def_ptr->length_of_audio_waveform;
     i2s_chan_handle_t  i2s_chan         = i2s_def_ptr->chan;
     QueueHandle_t      i2s_queue        = i2s_def_ptr->i2s_queue;
-    size_t             words_to_write   = 0;
+    size_t             actual_audio_pos = 0;
     size_t             bytes_to_write   = 0;
     size_t             bytes_written    = 0;
     gptimer_handle_t   gptimer_handle   = i2s_def_ptr->gptimer_handle;
@@ -341,8 +321,7 @@ static void i2s_play_task(void * user_ctx){
     i2s_passthrough_struct passthrough_data;
 
     audio_pos     = 0;                                                  //Prepare for next ISR to trigger by resetting audio_pos to 0
-    words_written = 0;                                                  //words_written to 0
-    words_to_write = 0;
+    actual_audio_pos = 0;
     buff_pos = 0;
     double vol_lin = *volume_lin_ptr;
 
@@ -350,78 +329,66 @@ static void i2s_play_task(void * user_ctx){
         write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
         audio_pos++;
         buff_pos++;
-        words_to_write++;
     }
 
-    buff_pos = 0;                       //Set to 0 now in case I forget to this this later:)
-    bytes_to_write = words_to_write*sizeof(int32_t);
-    bytes_written = 0;
-    do{     //change the size of the words_to_write arg
-        ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written)); //And pre-loading the buffer to transmit instantly upon the next ISR call
-        bytes_to_write -= bytes_written;
-    }
-    while(bytes_to_write>0 && bytes_written>0);
+    bytes_to_write = buff_pos*sizeof(int32_t);
 
-
+    // i2s_channel_enable(i2s_chan);
     /*This is the main part of the task that will run continuously, blocking until the ISR is triggered*/
 
     while (true){
         if(xQueueReceive(i2s_queue, &passthrough_data, portMAX_DELAY)){     //Wait forever until audio ISR triggers
 
-            printf("\nISR triggered and task now running\n");
-        
-
             i2s_channel_ISR_enable_finish(i2s_chan);                            //Keep freeRTOS happy and finish what i2s_channel_ISR_enable started in the ISR
-    
- 
-            while(audio_pos < audio_len){                                       //While the audio has not been fully transmitted (position in the audio file is less than the audio file's length)
+            while(actual_audio_pos < audio_len){                                       //While the audio has not been fully transmitted (position in the audio file is less than the audio file's length)
+                audio_pos = actual_audio_pos;
                 buff_pos = 0;
-                words_to_write = 0;
-                vol_lin = *volume_lin_ptr;
+                // vol_lin = *volume_lin_ptr;
+                vol_lin = .5;
+
+                // printf("Vol lin: %0.5f\n", vol_lin);
                 while (buff_pos < buff_len && audio_pos < audio_len){                                    //overwrite to create a new buffer of the next buff_len number of audio samples
                     write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
                     audio_pos++;
                     buff_pos++;
-                    words_to_write++;
+                    if(fabs(write_buff_ptr[buff_pos]) >= (BITS_IN_32BIT/8)*7) printf("Error\n");
                 }
-                buff_pos = 0;
-                bytes_to_write = words_to_write * sizeof(int32_t);                                              //Set to 0 now in case I forget to this this later:)            
-                bytes_written  = 0;                                                                // Write the new buffer to the i2s bus
-                
+                // printf("val: %li\n", write_buff_ptr[buff_len/2]);
+                // printf("Criteria: %li\n", (BITS_IN_32BIT/8)*7);
+                bytes_to_write = buff_pos * sizeof(int32_t);                                              //Set to 0 now in case I forget to this this later:)            
                 i2s_channel_write(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written, portMAX_DELAY); 
-                bytes_to_write -= bytes_written;
 
-                printf("i2swrite: Audio pos: %i | Audio len: %i\n | bytes to write: %i | bytes written: %i\n", audio_pos, audio_len, bytes_to_write, bytes_written);
+                actual_audio_pos += bytes_written / sizeof(int32_t);
+                // printf("i2swrite: Actual pos: %i | Audio len: %i\n | bytes written: %i\n", actual_audio_pos, audio_len, bytes_written);
             }
-
+            printf("Played sound!\n");
             i2s_channel_disable(i2s_chan);                                      //Audio file has been fully transmitted.  Disable the channel to allow new data to be preloaded
 
+            actual_audio_pos = 0;
             audio_pos     = 0;                                                  //Prepare for next ISR to trigger by resetting audio_pos to 0
             words_written = 0;                                                  //words_written to 0
-            words_to_write = 0;
-
             buff_pos = 0;
-            printf("Buff_pos: %i | buff_len: %i | audio pos: %i | audio len: %i\n", buff_pos, buff_len, audio_pos, audio_len);           
-            vol_lin = *volume_lin_ptr;
+
+            // vol_lin = *volume_lin_ptr;
+            // vol_lin = .1;
+
             while (buff_pos < buff_len && audio_pos < audio_len){        //Filling up a new buffer
                 write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
                 audio_pos++;
                 buff_pos++;
-                words_to_write++;
             }
-            printf("Buff_pos: %i | buff_len: %i | audio pos: %i | audio len: %i | Waveform_LEN: %i | words_to_write: %i\n", buff_pos, buff_len, audio_pos, audio_len, WAVEFORM_LEN, words_to_write);           
+            int y  = WAVEFORM_LEN / 2;
+            double audio_amp_perc1 = vol_lin * (double)audio_data_ptr[y]/ (double)BITS_IN_32BIT*10000.00;
+            int32_t audio_amp_perc2 = (int32_t)(vol_lin * (double)audio_data_ptr[y] *10000.00/ (double)BITS_IN_32BIT);
 
-            buff_pos = 0;                       //Set to 0 now in case I forget to this this later:)
-            bytes_to_write = words_to_write*sizeof(int32_t);
-            printf("Bytes to write: %i\n", bytes_to_write);
-            bytes_written = 0;
+            
+            bytes_to_write = buff_pos*sizeof(int32_t);
             do{     //change the size of the words_to_write arg
-                ESP_ERROR_CHECK(i2s_channel_preload_data(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written)); //And pre-loading the buffer to transmit instantly upon the next ISR call
+                i2s_channel_preload_data(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written); //And pre-loading the buffer to transmit instantly upon the next ISR call
                 bytes_to_write -= bytes_written;
-                printf("bytes written: %i | bytes_to_write: %i\n", bytes_written, bytes_to_write);
+                actual_audio_pos += bytes_written / sizeof(int32_t);
             }
             while(bytes_to_write>0 && bytes_written>0);
-            printf("\n\n\n");
 
         }
     }
@@ -438,9 +405,10 @@ void dac_read_vol_battery_task(void * audio_volume1){
     //Setup Analog read of pot on GPIO9
     uint32_t volt_array[30];
     double prev_rounded_avg_volt = 0;
-    int interval_in_mV = 10;
+    double interval_in_mV = 10;
+    double max_vol_change = 100;
     int num_samples = 30;
-    int max_rounded_voltage = 3080;
+    double max_rounded_voltage = 3080;
     double * audio_volume = (double*)audio_volume1;
 
     adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_12);
@@ -456,23 +424,23 @@ void dac_read_vol_battery_task(void * audio_volume1){
         }
         double avg_volt = (double)sum_volt_array / (double)num_samples;
         double rounded_avg_volt = round(avg_volt/interval_in_mV)*interval_in_mV;
-        if (fabs(rounded_avg_volt - prev_rounded_avg_volt)<=interval_in_mV && rounded_avg_volt!=max_rounded_voltage){
+        if (fabs(rounded_avg_volt - prev_rounded_avg_volt)<=interval_in_mV){
             rounded_avg_volt = prev_rounded_avg_volt;
         }
         prev_rounded_avg_volt = rounded_avg_volt;
 
         double voltage_fraction = rounded_avg_volt / max_rounded_voltage;
 
-        if (voltage_fraction==0) *audio_volume = 0;
-        // else if (voltage_fraction >=.9) *audio_volume = 100;
-        else{
-        *audio_volume = (voltage_fraction);
-        }
-
         double dBFS = -(voltage_fraction-1) * MIN_VOLUME_dBFS;
         double audio_vol_linear = pow(10.0, dBFS / 20.0);
+
+        if (voltage_fraction==0) 
+            *audio_volume = 0;
+        else{
+            *audio_volume = audio_vol_linear; //(voltage_fraction);
+        }
         // printf("dBFS: %.1f dB \n", dBFS);
-        // printf("Audio Linear Percent: %.1f%%", audio_vol_linear*100);
+        // printf("Audio Linear Percent: %.5f%%\n", audio_vol_linear*100);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -496,6 +464,10 @@ void app_main(void)
     create_sine_wave(wave, L_FREQUENCY_1, R_FREQUENCY_1);
 
     i2s_channel_setup(&tx_chan);
+    gpio_reset_pin(XSMT_PIN);
+    gpio_set_direction(XSMT_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(XSMT_PIN, 0);
+
 
     //I2S Main Function______________________________________________________I2S MAIN END________________________________I2S MAIN END______________________
 
@@ -574,94 +546,9 @@ void app_main(void)
     while(true){
         printf("Running...\n");
         // printf("Number of gpTimer Calls: %i\n", *(i2s_waveform_definition_struct.signal_idx_ptr));
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
 
-    //     /*Find current time and period of last loop*/
-    // int32_t start_time_us = esp_timer_get_time();
-    // int32_t curr_time_us = start_time_us;
-    // int32_t curr_time1_us = start_time_us;
-    // int32_t curr_time2_us = start_time_us;
-    // int32_t period_us = 0;
-    // int32_t last_time_us = start_time_us;
-    // int32_t write_time_us_main = start_time_us;
-    // int32_t WRITE_TRIM_US = 7.5e3;
-    // float period_ms;
-    // int j=0;
-    // size_t bytes_loaded;
-    // UBaseType_t uxHighWaterMark;
-
-    // printf("Pre disabling channel\n");
-
-
-    // while (j<300) {
-    //     curr_time_us = (esp_timer_get_time()) - start_time_us;   
-    //     period_us = curr_time_us - last_time_us;
-    //     period_ms = (float)period_us / (float)1000;
-    //     last_time_us = curr_time_us;
-    //     curr_time1_us = (esp_timer_get_time()) - start_time_us;
-
-    //     // i2s_write_function(wave, w_buf, &write_time_us_main, start_time_us, &volume_frac);
-
-
-    //     int32_t *audio_waveform = (int32_t*)wave;           //Cast the waveform argumen to a 32-bit int pointer
-
-
-    //     size_t w_bytes = I2S_BUFF_LEN;                         //Create variable to track how many bytes are written to the I2S DMA buffer
-    //     size_t audio_samples_pos = 0;                           // Keep track of where we are in the audio data
-
-    //     double dBFS = -(volume_frac-1) * MIN_VOLUME_dBFS;
-    //     double audio_vol_linear = pow(10.0, dBFS / 20.0);
-
-    //     /*Here we iterate through each index in the audio waveform, and assign the value to the wbuf*/
-    //     while (audio_samples_pos<WAVEFORM_LEN) {
-    //         w_buf[audio_samples_pos] = audio_vol_linear*(audio_waveform[audio_samples_pos]);
-    //         audio_samples_pos++;
-    //         }
-
-    //     /*Iterate through and write wbuf to I2S DMA buffer.  If len(wbuf) were > than I2S buff size, 
-    //     we would use the wbytes variable to move along wbuf and start a new write at the position where the 
-    //     last one left off.  That's not the case here, though*/
-    //     // for (int tot_bytes = 0; tot_bytes < WAVEFORM_SIZE; tot_bytes += w_bytes){
-    //     write_time_us_main = esp_timer_get_time() - start_time_us;
-
-    //     ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));
-    //     bytes_loaded = 0;      
-    //     printf("Pre pre-loading channel\n");
-
-    //     do{
-    //        ESP_ERROR_CHECK(i2s_channel_preload_data(tx_chan, w_buf, WAVEFORM_SIZE, &bytes_loaded));
-    //     }
-    //     while(bytes_loaded == I2S_BUFF_LEN);
-
-    //     printf("Pre enabling channel\n");
-
-
-    //     // ESP_ERROR_CHECK(i2s_channel_write(tx_chan, w_buf, WAVEFORM_SIZE, &w_bytes, DURATION_MS));
-    //     printf("Audio should be playing\n");
-    //     ets_delay_us(500e3);
-    //     printf("Audio should have played\n");
-    //     ets_delay_us(1000e3);
-    //     printf("Now, channel is enabled\n");
-
-
-
-
-    //     // ets_delay_us(DURATION_MS*1000+5e3+WRITE_TRIM_US-(esp_timer_get_time()-write_time_us_main-start_time_us));
-
-    //     uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-
-    //     j++;
-    //     printf("Bytes Loaded: %i\n", bytes_loaded);
-    //     printf("Task Stack Usage: %i\n", uxHighWaterMark);
-    //     printf("Period: %0.3f ms\n",period_ms);
-    //     printf("Volume: %0.2f%%\n\n", volume_frac*100);
-    //     curr_time2_us = (esp_timer_get_time()) - start_time_us; 
-    //     i2s_channel_ISR_enable_finish(tx_chan);
-
-    //     ets_delay_us(5000e3);
-    //     // ets_delay_us(200e3 - (curr_time2_us - curr_time_us));
-    // }
 
 }
