@@ -34,7 +34,7 @@ const int VOL_PIN      =       GPIO_NUM_9;
 const int XSMT_PIN     =       GPIO_NUM_4;
 const int I2S_WS_PIN   =       1;      //LCK, LRC, 13 I2S word select io number
 const int I2S_DOUT_PIN =       2;    //DIN, 12 I2S data out io number
-const int I2S_BCK_PIN  =       3;      //BCK 11  I2S bit clock io number
+const int I2S_BCK_PIN  =       7;      //BCK 11  I2S bit clock io number
 
 const int32_t BITS_IN_32BIT = 2147483647;       //2^31 - 1
 const float   VOL_PERCENT   = 100.00;
