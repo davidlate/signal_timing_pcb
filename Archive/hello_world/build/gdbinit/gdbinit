@@ -1,0 +1,2 @@
+source /home/davidlate/esp_repos/custom_pcb_audio_electrical/hello_world/build/gdbinit/symbols
+source /home/davidlate/esp_repos/custom_pcb_audio_electrical/hello_world/build/gdbinit/connect
