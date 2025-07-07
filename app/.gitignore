@@ -1,0 +1,14 @@
+.devcontainer
+.vscode
+build
+.clangd
+.gitignroe
+CMakeLists*
+dependencies.lock
+pytest*
+sdkconfig*
+idf_component*
+Kconfig*
+fileparser
+wavfileparser
+audio_file.wav
