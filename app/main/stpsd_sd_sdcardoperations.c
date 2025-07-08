@@ -64,6 +64,17 @@ typedef struct{
     long int  audiofile_data_end_pos;
 } stp_sd__wavFile;
 
+typedef struct{
+    bool     loaded;
+    int      len_samples;
+    int      start_idx;
+    int      end_idx;
+    int      rise_fall_samples;
+    int32_t* data;              //array of int32_t samples
+    int      data_pos;
+    int      data_size;
+} stp_sd__audio_chunk;
+
 static esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
 
     char* TAG = "mount sd";
@@ -293,12 +304,25 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     return ESP_OK;
 }
 
+//TODO
+static esp_err_t sd_stp__construct_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavFile* wave_file_ptr){
 
-static esp_err_t sd_stp__load_random_portion_of_audio_file(int32_t* buffer, int num_samples_to_write, int num_samples__to_pad, stp_sd__wavFile* wave_file_ptr){
+    if(audio_chunk->data != NULL){
+        free(audio_chunk->data);
+    }
+    audio_chunk->data = malloc(audio_chunk->len_samples * sizeof(int32_t));
     bootloader_random_enable();
     double random = (double)esp_random() / (double)(pow(2,32)-1);
     printf("Random Number: %.3f\n", random);
     bootloader_random_disable();
+    return ESP_OK;
+}
+
+static esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
+
+    if(audio_chunk->data != NULL){
+        free(audio_chunk->data);
+    }
     return ESP_OK;
 }
 
@@ -335,10 +359,9 @@ void app_main(void)
         ESP_LOGE(TAG, "Error opening audio file");
         return;
     }
-    int32_t buffer[4] = {0};
-    int len = 0;
-    int32_t test[192] = {0};
-    sd_stp__load_random_portion_of_audio_file(buffer, len, 10, &wave_file);
+
+    stp_sd__audio_chunk audio_chunk;
+    sd_stp__load_random_portion_of_audio_file(&audio_chunk, &wave_file);
 
     ret = sd_stp__close_audio_file(&wave_file);
 
