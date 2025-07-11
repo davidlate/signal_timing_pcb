@@ -68,7 +68,6 @@ typedef struct{
     int      chunk_len;                   //REQUIRED INPUT: length of chunk in number of samples
     int      rise_fall_num_samples;       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
     int      padding_num_samples;         //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
-
     int      capacity;                    //memory capacity of chunk_data_ptr
     int      chunk_size;                  //size of chunk in bytes
     int      start_idx;                   //starting index of chunk relative to audio data
@@ -89,13 +88,10 @@ static esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
     };
 
     ESP_LOGI(TAG, "Initializing SD card_ptr");
-
     ESP_LOGI(TAG, "Using SPI peripheral");
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-
     spi_config_ptr->host_ptr = &host;
-
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = spi_config_ptr->mosi_di_pin,
         .miso_io_num = spi_config_ptr->miso_do_pin,
@@ -142,36 +138,28 @@ static esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
     }
     spi_config_ptr->open = true;
     return ESP_OK;
-
 }
 
 static esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     // All done, unmount partition and disable SPI peripheral
     char* TAG = "unmount SD";
-    esp_err_t ret = ESP_OK;
-    ret = (esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr)==ESP_OK);
-    
-    if (ret != ESP_OK){
-        ESP_LOGI(TAG, "Card unmounted");
+
+    if(esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr)!=ESP_OK){
+        ESP_LOGE(TAG, "Error unmounting SPI Bus!");
+        return ESP_FAIL;
     }
-    else{
-        ESP_LOGE(TAG, "Error unmounting SD card");
-        ret = ESP_FAIL;
-    }
+
     //deinitialize the bus after all devices are removed
-    if(spi_bus_free((spi_config_ptr->host_ptr)->slot) == ESP_OK){
-        ESP_LOGI(TAG, "SPI Bus freed");
+    if(spi_bus_free((spi_config_ptr->host_ptr)->slot) != ESP_OK){
+        ESP_LOGE(TAG, "Error freeing SPI bus");
+        return ESP_FAIL;
     }
     else{
-        ESP_LOGE(TAG, "Error freeing SPI bus");
-        ret = ESP_FAIL;
-    }
-    if (ret ==ESP_OK){
         spi_config_ptr->open = false;
         memset(spi_config_ptr, 0, sizeof(*spi_config_ptr)); //Reset all members of wave file to 0;
     }
 
-    return ret;
+    return ESP_OK;
 }
 
 static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
@@ -207,7 +195,7 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     //read filesize
     num_objs_to_read = 1;
     count = fread(&(wave_file_ptr->filesize), sizeof(wave_file_ptr->filesize), num_objs_to_read, wave_file_ptr->fp);
-	ESP_LOGI(TAG, "filesize: %li bytes", wave_file_ptr->filesize); 
+	ESP_LOGI(TAG, "filesize: %li bytes", wave_file_ptr->filesize);
 
     //read WAVE marker and check that it is "WAVE"
     num_objs_to_read = 4;
@@ -231,7 +219,7 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     num_objs_to_read = 1;
     count = fread(&wave_file_ptr->fmt_length, sizeof(wave_file_ptr->fmt_length), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "fmt length: %li", wave_file_ptr->fmt_length);
-    
+       
     //read type of fmt data
     num_objs_to_read = 1;
     count = fread(&wave_file_ptr->fmt_type, sizeof(wave_file_ptr->fmt_type), num_objs_to_read, wave_file_ptr->fp);
@@ -240,7 +228,6 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
         ESP_LOGE(TAG, "File must be PCM format!");
         return ESP_FAIL;
     }
-
     //read number of channels
     num_objs_to_read = 1;
     count = fread(&(wave_file_ptr->num_channels), sizeof(wave_file_ptr->num_channels), num_objs_to_read, wave_file_ptr->fp);
@@ -257,7 +244,6 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
         ESP_LOGE(TAG, "Sample Rate must be 96000 Hz!");
         return ESP_FAIL;
     }
-
     //read (Sample Rate * BitsPerSample * Channels) / 8
     num_objs_to_read = 1;
     count = fread(&(wave_file_ptr->SampleRateBitsPerSampleChannels_8), sizeof(wave_file_ptr->SampleRateBitsPerSampleChannels_8), num_objs_to_read, wave_file_ptr->fp);
@@ -276,7 +262,6 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
         ESP_LOGE(TAG, "Audio must be 32 bit audio!");
         return ESP_FAIL;
     }
-
     //read data chunk header
     num_objs_to_read = 4;
     count = fread(wave_file_ptr->data_header, sizeof(*(wave_file_ptr->data_header)), num_objs_to_read, wave_file_ptr->fp);
@@ -284,7 +269,6 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
         ESP_LOGE(TAG, "Data header does not match!");
     }
     ESP_LOGI(TAG, "data: %.*s", (int)sizeof(*(wave_file_ptr->data_header))*num_objs_to_read, wave_file_ptr->data_header);
-
     //read data size
     num_objs_to_read = 1;
     count = fread(&(wave_file_ptr->data_size), sizeof(wave_file_ptr->data_size), num_objs_to_read, wave_file_ptr->fp);
@@ -325,9 +309,9 @@ static esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_s
         ESP_LOGE(TAG, "Wave file not open!");
         return ESP_FAIL;
     }
-
+    /*Get locations of the start- and end- idxs of the allowable space where we can take our audio file from, in no. of bytes from beginning of file, that we can grab our chunk from.*/
     double start_file_pos_samples = (double)((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + (double)audio_chunk->padding_num_samples;
-    double end_file_pos_samples   = (double)((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   + (double)audio_chunk->padding_num_samples;
+    double end_file_pos_samples   = (double)((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   - (double)audio_chunk->padding_num_samples - (double)audio_chunk->chunk_len;
     double delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
 
     if ((double)start_file_pos_samples != (int)start_file_pos_samples || (double)end_file_pos_samples != (int)end_file_pos_samples){
@@ -339,29 +323,48 @@ static esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_s
         return ESP_FAIL;
     }
     
-    bootloader_random_enable();   
+    bootloader_random_enable();
+
     double random = (double)esp_random() / (double)(pow(2,32)-1);  //convert from uint32_t to double between 0 and 1
-    double chunk_start_pos_samples = round(delta_file_pos_samples * random) + start_file_pos_samples;   //Use the floor function 
+    double chunk_start_pos_samples = round(delta_file_pos_samples * random) + start_file_pos_samples;
     int chunk_start_pos_samples_int = chunk_start_pos_samples;
 
     if ((double)chunk_start_pos_samples != (double)chunk_start_pos_samples){
         ESP_LOGE(TAG, "Implicit conversion error 2 with audio chunk!");
     }
-    if (chunk_start_pos_samples_int % 2){
-        chunk_start_pos_samples_int -=1;    //We must start with an even index so that our right and left channels always line up properly
+    if (chunk_start_pos_samples_int  % 2 == 0){
+        ESP_LOGI(TAG, "ODD");
+        chunk_start_pos_samples_int += 1;    //We must start with an even index so that our right and left channels always line up properly.  It's okay to eat into 1 sample of our padding.
     }
 
-    int file_start_bytes = (start_file_pos_samples*sizeof(int32_t));
-    int ret = fseek(wave_file_ptr->fp, file_start_bytes, SEEK_SET);     //Set file position to the one determined by the random selection
-    if (ret != 0){
+    int chunk_start_pos_filebytes = (chunk_start_pos_samples_int*sizeof(int32_t));   //The location in the file where our audio chunk will begin
+                                                                            
+    if(fseek(wave_file_ptr->fp, chunk_start_pos_filebytes, SEEK_SET) != ESP_OK){     //Set file position to the one determined by the random selection
         ESP_LOGE(TAG, "Error setting new file position!");
+        bootloader_random_disable();
         return ESP_FAIL;
     }
-    int sample_count = fread(audio_chunk->chunk_data_ptr, sizeof(int32_t), audio_chunk->chunk_len, wave_file_ptr->fp);
-    audio_chunk->start_idx = chunk_start_pos_samples_int;
-    audio_chunk->end_idx   = chunk_start_pos_samples_int + sample_count - 1;
-    printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nChunk Length: %i\nSample Count: %i\n", audio_chunk->start_idx, *(audio_chunk->chunk_data_ptr), audio_chunk->end_idx, *(audio_chunk->chunk_data_ptr+(audio_chunk->chunk_len)), audio_chunk->chunk_len, sample_count);
+    int num_samples_read = fread(audio_chunk->chunk_data_ptr, sizeof(int32_t), audio_chunk->chunk_len, wave_file_ptr->fp);
+
+    if(num_samples_read != audio_chunk->chunk_len){
+        ESP_LOGE(TAG, "Not enough samples were read from the file!");
+        bootloader_random_disable();
+        return ESP_FAIL;
+    }
+    
+    int chunk_end_offset = num_samples_read -1;
+    audio_chunk->start_idx = chunk_start_pos_samples_int - (int)start_file_pos_samples + audio_chunk->padding_num_samples;
+    audio_chunk->end_idx   = audio_chunk->start_idx + chunk_end_offset;
+
+    printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nChunk Length: %i\nSample Count: %i\n",
+            audio_chunk->start_idx,
+            audio_chunk->chunk_data_ptr[0],
+            audio_chunk->end_idx,
+            audio_chunk->chunk_data_ptr[chunk_end_offset],
+            audio_chunk->chunk_len,
+            num_samples_read);
     printf("Random Number: %.3f\n", random);
+
     bootloader_random_disable();
     ESP_LOGI(TAG, "Successfully loaded new audio chunk");
 
@@ -390,50 +393,64 @@ void app_main(void)
 {
     char* TAG = "main";
 
+
     stp_sd__spi_config spi_config ={
+        .open        = false,
         .mosi_di_pin = PIN_NUM_MOSI,
         .miso_do_pin = PIN_NUM_MISO,
         .clk_pin     = PIN_NUM_CLK,
         .cs_pin      = PIN_NUM_CS,
         .mount_point = MOUNT_POINT,
+        .card_ptr    = NULL,
+        .host_ptr    = NULL,
     };
 
-    stp_sd__mount_sd_card(&spi_config);
+    if(stp_sd__mount_sd_card(&spi_config) != ESP_OK){
+        ESP_LOGE(TAG, "Error Mounting SD Card!");
+        return;
+    }
 
     stp_sd__wavFile wave_file = {0};  
 
-    int ret = sd_stp__open_audio_file(&wave_file);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Error opening audio file");
+    if(sd_stp__open_audio_file(&wave_file) != ESP_OK){
+        ESP_LOGE(TAG, "Error Opening Audio File!");
         return;
     }
+
+    stp_sd__audio_chunk audio_chunk = {     //All zeroed or NULL parameters are set by the sd_stp__get_audio_chunk function
+        .chunk_len               = 100,
+        .rise_fall_num_samples   = 96,
+        .padding_num_samples     = 10,
+        .capacity                = 0,
+        .start_idx               = 0,
+        .end_idx                 = 0,     
+        .chunk_data_ptr          = NULL,     
+        .chunk_data_idx          = 0,
+    };
 
     for (int j = 0; j<20; j++){
-        stp_sd__audio_chunk audio_chunk = {
-            .chunk_len = 10,
-            .rise_fall_num_samples = 96,
-            .padding_num_samples = 10  
+
+        if(sd_stp__get_audio_chunk(&audio_chunk, &wave_file) != ESP_OK){
+            ESP_LOGE(TAG, "Error getting audio chunk!");
+            return;
         };
-
-        sd_stp__get_audio_chunk(&audio_chunk, &wave_file);
         vTaskDelay(pdMS_TO_TICKS(1000));
-        }
+    }
 
-    ret = sd_stp__close_audio_file(&wave_file);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Error closing audio file");
+    if(sd_stp__destruct_audio_chunk(&audio_chunk) != ESP_OK){
+        ESP_LOGE(TAG, "Error destructing audio chunk!");
         return;
     }
 
-    ret = stp_sd__unmount_sd_card(&spi_config);
+    if(sd_stp__close_audio_file(&wave_file) != ESP_OK){
+        ESP_LOGE(TAG, "Error closing audio file!");
+        return;
+    }
 
-    if (ret != ESP_OK) {
+    if(stp_sd__unmount_sd_card(&spi_config) != ESP_OK){
         ESP_LOGE(TAG, "Error unmounting SD card");
         return;
     }
 
-
-
+    return;
 }
