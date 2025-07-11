@@ -43,7 +43,7 @@ typedef struct {
 
 
 typedef struct{
-    bool      open;
+    int       capacity;
     FILE*     fp;
     char      RIFF[4];
     int32_t   filesize;
@@ -58,21 +58,23 @@ typedef struct{
     int16_t   bitness;
     char      data_header[4];
     int32_t   data_size;
-    int32_t*  audio_ptr;
     int32_t   audio_len;
     long int  audiofile_data_start_pos;
     long int  audiofile_data_end_pos;
 } stp_sd__wavFile;
 
+
 typedef struct{
-    bool     loaded;
-    int      len_samples;
-    int      start_idx;
-    int      end_idx;
-    int      rise_fall_samples;
-    int32_t* data;              //array of int32_t samples
-    int      data_pos;
-    int      data_size;
+    int      chunk_len;                   //REQUIRED INPUT: length of chunk in number of samples
+    int      rise_fall_num_samples;       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+    int      padding_num_samples;         //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
+
+    int      capacity;                    //memory capacity of chunk_data_ptr
+    int      chunk_size;                  //size of chunk in bytes
+    int      start_idx;                   //starting index of chunk relative to audio data
+    int      end_idx;                     //ending index of chunk relative to audio data
+    int32_t* chunk_data_ptr;              //array of int32_t audio samples
+    int      chunk_data_idx;              //index in chunk where we are currently
 } stp_sd__audio_chunk;
 
 static esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
@@ -193,59 +195,63 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     }
 
     int count = 0;
+    int num_objs_to_read= 4;
     //read RIFF data
-	count = fread(wave_file_ptr->RIFF, sizeof(wave_file_ptr->RIFF), 1, wave_file_ptr->fp);
-	ESP_LOGI(TAG, "RIFF: %.*s", (int)sizeof(wave_file_ptr->RIFF), wave_file_ptr->RIFF); 
-    if (count != 1){
-        ESP_LOGE(TAG, "RIFF not read properly!");
-    }
-
-    if(memcmp("RIFF", wave_file_ptr->RIFF, sizeof(wave_file_ptr->RIFF))){
+	count = fread(wave_file_ptr->RIFF, sizeof(*(wave_file_ptr->RIFF)), num_objs_to_read, wave_file_ptr->fp);
+	ESP_LOGI(TAG, "RIFF: %.*s", (int)sizeof(*(wave_file_ptr->RIFF))*num_objs_to_read, wave_file_ptr->RIFF);
+    
+    if(memcmp("RIFF", wave_file_ptr->RIFF, sizeof(*(wave_file_ptr->RIFF)))){
         ESP_LOGE(TAG, "RIFF does not match!");
     }
 
     //read filesize
-    count = fread(&(wave_file_ptr->filesize), sizeof(wave_file_ptr->filesize), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&(wave_file_ptr->filesize), sizeof(wave_file_ptr->filesize), num_objs_to_read, wave_file_ptr->fp);
 	ESP_LOGI(TAG, "filesize: %li bytes", wave_file_ptr->filesize); 
 
-    //read WAVE marker
-    count = fread(wave_file_ptr->WAVE, sizeof(wave_file_ptr->WAVE), 1, wave_file_ptr->fp);
-    ESP_LOGI(TAG, "WAVE: %.*s", (int)sizeof(wave_file_ptr->WAVE), wave_file_ptr->WAVE);
+    //read WAVE marker and check that it is "WAVE"
+    num_objs_to_read = 4;
+    count = fread(wave_file_ptr->WAVE, sizeof(*(wave_file_ptr->WAVE)), num_objs_to_read, wave_file_ptr->fp);
+    ESP_LOGI(TAG, "WAVE: %.*s", (int)sizeof(*(wave_file_ptr->WAVE))*num_objs_to_read, wave_file_ptr->WAVE);
     if(memcmp("WAVE", wave_file_ptr->WAVE, sizeof(wave_file_ptr->WAVE))){
         ESP_LOGE(TAG, "WAVE not read successfully!");
         return ESP_FAIL;
     }
 
-    //read fmt marker
-    count = fread(wave_file_ptr->fmt, sizeof(wave_file_ptr->fmt), 1, wave_file_ptr->fp);
-    ESP_LOGI(TAG, "fmt: %.*s", (int)sizeof(wave_file_ptr->fmt), wave_file_ptr->fmt);
-
+    //read fmt marker and check that it is "fmt "
+    num_objs_to_read = 4;
+    count = fread(wave_file_ptr->fmt, sizeof(*(wave_file_ptr->fmt)), num_objs_to_read, wave_file_ptr->fp);
+    ESP_LOGI(TAG, "fmt: %.*s", (int)sizeof(*(wave_file_ptr->fmt))*num_objs_to_read, wave_file_ptr->fmt);
     if(memcmp("fmt ", wave_file_ptr->fmt, sizeof(wave_file_ptr->fmt))){
         ESP_LOGE(TAG, "fmt not read successfully!");
         return ESP_FAIL;
     }
 
     //read length of fmt data
-    count = fread(&wave_file_ptr->fmt_length, sizeof(wave_file_ptr->fmt_length), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&wave_file_ptr->fmt_length, sizeof(wave_file_ptr->fmt_length), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "fmt length: %li", wave_file_ptr->fmt_length);
     
     //read type of fmt data
-    count = fread(&wave_file_ptr->fmt_type, sizeof(wave_file_ptr->fmt_type), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&wave_file_ptr->fmt_type, sizeof(wave_file_ptr->fmt_type), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "fmt type: %i", wave_file_ptr->fmt_type);
-
-    if(wave_file_ptr->fmt_type != 1){
+    if(wave_file_ptr->fmt_type != 1){               //1 specifies that file is in PCM format (which is required)
         ESP_LOGE(TAG, "File must be PCM format!");
         return ESP_FAIL;
     }
+
     //read number of channels
-    count = fread(&(wave_file_ptr->num_channels), sizeof(wave_file_ptr->num_channels), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&(wave_file_ptr->num_channels), sizeof(wave_file_ptr->num_channels), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "Number of Channels: %i", wave_file_ptr->num_channels);
-    if(wave_file_ptr->num_channels != 2){
+    if(wave_file_ptr->num_channels != 2){       //Must be 2 channels for stereo audio output
         ESP_LOGE(TAG, "Audio must be stereo!");
         return ESP_FAIL;
     }
     //read sample rate
-    count = fread(&wave_file_ptr->sample_rate, sizeof(wave_file_ptr->sample_rate), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&wave_file_ptr->sample_rate, sizeof(wave_file_ptr->sample_rate), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "Sample Rate: %li Hz", wave_file_ptr->sample_rate);
     if(wave_file_ptr->sample_rate != 96000){
         ESP_LOGE(TAG, "Sample Rate must be 96000 Hz!");
@@ -253,15 +259,18 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     }
 
     //read (Sample Rate * BitsPerSample * Channels) / 8
-    count = fread(&(wave_file_ptr->SampleRateBitsPerSampleChannels_8), sizeof(wave_file_ptr->SampleRateBitsPerSampleChannels_8), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&(wave_file_ptr->SampleRateBitsPerSampleChannels_8), sizeof(wave_file_ptr->SampleRateBitsPerSampleChannels_8), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "(Sample Rate * BitsPerSample * Channels) / 8: %li", wave_file_ptr->SampleRateBitsPerSampleChannels_8);
 
     //read (BitsPerSample * Channels) / 8.1
-    count = fread(&(wave_file_ptr->BitsPerSampleChannels_8_1), sizeof(wave_file_ptr->BitsPerSampleChannels_8_1), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&(wave_file_ptr->BitsPerSampleChannels_8_1), sizeof(wave_file_ptr->BitsPerSampleChannels_8_1), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "(BitsPerSample * Channels) / 8.1: %i", wave_file_ptr->BitsPerSampleChannels_8_1);
 
     //read bitness
-    count = fread(&(wave_file_ptr->bitness), sizeof(wave_file_ptr->bitness), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&(wave_file_ptr->bitness), sizeof(wave_file_ptr->bitness), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "Bits per Sample: %i", wave_file_ptr->bitness);
     if(wave_file_ptr->bitness != 32){
         ESP_LOGE(TAG, "Audio must be 32 bit audio!");
@@ -269,11 +278,16 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     }
 
     //read data chunk header
-    count = fread(wave_file_ptr->data_header, sizeof(wave_file_ptr->data_header), 1, wave_file_ptr->fp);
-    ESP_LOGI(TAG, "data: %.*s", (int)sizeof(wave_file_ptr->data_header), wave_file_ptr->data_header);
+    num_objs_to_read = 4;
+    count = fread(wave_file_ptr->data_header, sizeof(*(wave_file_ptr->data_header)), num_objs_to_read, wave_file_ptr->fp);
+    if(memcmp("data", wave_file_ptr->data_header, sizeof(*(wave_file_ptr->data_header)))){
+        ESP_LOGE(TAG, "Data header does not match!");
+    }
+    ESP_LOGI(TAG, "data: %.*s", (int)sizeof(*(wave_file_ptr->data_header))*num_objs_to_read, wave_file_ptr->data_header);
 
     //read data size
-    count = fread(&(wave_file_ptr->data_size), sizeof(wave_file_ptr->data_size), 1, wave_file_ptr->fp);
+    num_objs_to_read = 1;
+    count = fread(&(wave_file_ptr->data_size), sizeof(wave_file_ptr->data_size), num_objs_to_read, wave_file_ptr->fp);
     ESP_LOGI(TAG, "Data Size: %li bytes", wave_file_ptr->data_size);
 
     //Get location in file where audio data starts, in number of bytes from beginning of file (this works because we open the file in binary mode)
@@ -282,57 +296,92 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
 
     //Calculate location in file of final audio data point, in number of bytes from the beginning of the file
     wave_file_ptr->audiofile_data_end_pos = wave_file_ptr->audiofile_data_start_pos + (wave_file_ptr->data_size) - 1;
+    wave_file_ptr->audio_len = wave_file_ptr->data_size / sizeof(int32_t);
     ESP_LOGI(TAG, "Audio Data End position: %li bytes", wave_file_ptr->audiofile_data_end_pos);
 
-
-    //Start reading audio data
-    wave_file_ptr->audio_len = wave_file_ptr->data_size / sizeof(int32_t);
-    wave_file_ptr->audio_ptr = malloc(wave_file_ptr->data_size);
-    if (wave_file_ptr->audio_ptr==NULL){
-        ESP_LOGE(TAG, "No more memory!");
-        return ESP_FAIL;
-    }
-
-    count = fread(wave_file_ptr->audio_ptr, wave_file_ptr->data_size, wave_file_ptr->data_size/sizeof(int32_t), wave_file_ptr->fp);
-
-    for (int i=0; i<20; i++){
-        printf("Audio Data [%i]: %li\n", i, *(wave_file_ptr->audio_ptr+i));
-    }
-    printf("Last audio data reading: %li\n", *(wave_file_ptr->audio_ptr + (wave_file_ptr->audiofile_data_end_pos-wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)));
-
-    wave_file_ptr->open = true;
     return ESP_OK;
 }
 
-//TODO
-static esp_err_t sd_stp__construct_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavFile* wave_file_ptr){
-
-    if(audio_chunk->data != NULL){
-        free(audio_chunk->data);
+//This function selects a "chunk" of specified length from the wave file, beginning at a random start point, with padding after the beginning and before the ending
+static esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavFile* wave_file_ptr){
+    char* TAG = "audio_chunk_cont";
+    audio_chunk->chunk_size = audio_chunk->chunk_len * sizeof(*(audio_chunk->chunk_data_ptr));
+    //allocate memory for the audio chunk, if needed
+    if(audio_chunk->capacity <= audio_chunk->chunk_size){
+        if(audio_chunk->chunk_data_ptr != NULL){
+            audio_chunk->capacity = 2*audio_chunk->chunk_size;
+            audio_chunk->chunk_data_ptr = realloc(audio_chunk->chunk_data_ptr, 2*audio_chunk->chunk_size);
+        }
+        else{
+            audio_chunk->chunk_data_ptr = malloc(2*audio_chunk->chunk_size);
+            if (audio_chunk->chunk_data_ptr==NULL){
+                ESP_LOGE(TAG, "No memory available for audio chunk!");
+                return ESP_FAIL;
+            }
+        }
     }
-    audio_chunk->data = malloc(audio_chunk->len_samples * sizeof(int32_t));
-    bootloader_random_enable();
-    double random = (double)esp_random() / (double)(pow(2,32)-1);
+
+    if(wave_file_ptr->fp == NULL){
+        ESP_LOGE(TAG, "Wave file not open!");
+        return ESP_FAIL;
+    }
+
+    double start_file_pos_samples = (double)((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + (double)audio_chunk->padding_num_samples;
+    double end_file_pos_samples   = (double)((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   + (double)audio_chunk->padding_num_samples;
+    double delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
+
+    if ((double)start_file_pos_samples != (int)start_file_pos_samples || (double)end_file_pos_samples != (int)end_file_pos_samples){
+        ESP_LOGE(TAG, "Implicit conversion error with audio chunk!");
+        return ESP_FAIL;
+    }
+    if (delta_file_pos_samples < audio_chunk->chunk_size){
+        ESP_LOGE(TAG, "Audio chunk is longer than available audio data!  Increase file length, or decrease chunk length or chunk padding.");
+        return ESP_FAIL;
+    }
+    
+    bootloader_random_enable();   
+    double random = (double)esp_random() / (double)(pow(2,32)-1);  //convert from uint32_t to double between 0 and 1
+    double chunk_start_pos_samples = round(delta_file_pos_samples * random) + start_file_pos_samples;   //Use the floor function 
+    int chunk_start_pos_samples_int = chunk_start_pos_samples;
+
+    if ((double)chunk_start_pos_samples != (double)chunk_start_pos_samples){
+        ESP_LOGE(TAG, "Implicit conversion error 2 with audio chunk!");
+    }
+    if (chunk_start_pos_samples_int % 2){
+        chunk_start_pos_samples_int -=1;    //We must start with an even index so that our right and left channels always line up properly
+    }
+
+    int file_start_bytes = (start_file_pos_samples*sizeof(int32_t));
+    int ret = fseek(wave_file_ptr->fp, file_start_bytes, SEEK_SET);     //Set file position to the one determined by the random selection
+    if (ret != 0){
+        ESP_LOGE(TAG, "Error setting new file position!");
+        return ESP_FAIL;
+    }
+    int sample_count = fread(audio_chunk->chunk_data_ptr, sizeof(int32_t), audio_chunk->chunk_len, wave_file_ptr->fp);
+    audio_chunk->start_idx = chunk_start_pos_samples_int;
+    audio_chunk->end_idx   = chunk_start_pos_samples_int + sample_count - 1;
+    printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nChunk Length: %i\nSample Count: %i\n", audio_chunk->start_idx, *(audio_chunk->chunk_data_ptr), audio_chunk->end_idx, *(audio_chunk->chunk_data_ptr+(audio_chunk->chunk_len)), audio_chunk->chunk_len, sample_count);
     printf("Random Number: %.3f\n", random);
     bootloader_random_disable();
+    ESP_LOGI(TAG, "Successfully loaded new audio chunk");
+
     return ESP_OK;
 }
 
 static esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
 
-    if(audio_chunk->data != NULL){
-        free(audio_chunk->data);
+    if(audio_chunk->chunk_data_ptr != NULL){
+        free(audio_chunk->chunk_data_ptr);
     }
+    audio_chunk->capacity = 0;
     return ESP_OK;
 }
-
 
 static esp_err_t sd_stp__close_audio_file(stp_sd__wavFile* wave_file_ptr){
     if (wave_file_ptr->fp != NULL){
         fclose(wave_file_ptr->fp);
     }
-    memset(wave_file_ptr, 0, sizeof(*wave_file_ptr)); //Reset all members of wave file to 0;
-    wave_file_ptr->open = false;
+    memset(wave_file_ptr, 0, sizeof(wave_file_ptr)); //Reset all members of wave file to 0;
     return ESP_OK;
 }
 
@@ -360,8 +409,16 @@ void app_main(void)
         return;
     }
 
-    stp_sd__audio_chunk audio_chunk;
-    sd_stp__load_random_portion_of_audio_file(&audio_chunk, &wave_file);
+    for (int j = 0; j<20; j++){
+        stp_sd__audio_chunk audio_chunk = {
+            .chunk_len = 10,
+            .rise_fall_num_samples = 96,
+            .padding_num_samples = 10  
+        };
+
+        sd_stp__get_audio_chunk(&audio_chunk, &wave_file);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        }
 
     ret = sd_stp__close_audio_file(&wave_file);
 
@@ -376,6 +433,7 @@ void app_main(void)
         ESP_LOGE(TAG, "Error unmounting SD card");
         return;
     }
+
 
 
 }
