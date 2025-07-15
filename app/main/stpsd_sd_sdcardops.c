@@ -20,63 +20,10 @@
 #include "bootloader_random.h"
 #include "math.h"
 
-#define MOUNT_POINT     "/sdcard"
-#define AUDIO_FILE_PATH "/AUDIO.wav"
-
-// Pin assignments can be set in menuconfig, see "SD SPI Example Configuration" menu.
-// You can also change the pin assignments here by changing the following 4 lines.
-#define PIN_NUM_MISO  GPIO_NUM_13   //DO
-#define PIN_NUM_MOSI  GPIO_NUM_11   //DI
-#define PIN_NUM_CLK   GPIO_NUM_12   //CLK
-#define PIN_NUM_CS    GPIO_NUM_10   //CS
-
-typedef struct {
-    bool open;
-    int miso_do_pin;
-    int mosi_di_pin;
-    int clk_pin;
-    int cs_pin;
-    char* mount_point;
-    sdmmc_card_t* card_ptr;
-    sdmmc_host_t* host_ptr;
-} stp_sd__spi_config;
+#include "stp_sd_sdcardops.h"
 
 
-typedef struct{
-    int       capacity;
-    FILE*     fp;
-    char      RIFF[4];
-    int32_t   filesize;
-    char      WAVE[4];
-    char      fmt[4];
-    int32_t   fmt_length;
-    int16_t   fmt_type;
-    int16_t   num_channels;
-    int32_t   sample_rate;
-    int32_t   SampleRateBitsPerSampleChannels_8;
-    int16_t   BitsPerSampleChannels_8_1;
-    int16_t   bitness;
-    char      data_header[4];
-    int32_t   data_size;
-    int32_t   audio_len;
-    long int  audiofile_data_start_pos;
-    long int  audiofile_data_end_pos;
-} stp_sd__wavFile;
-
-
-typedef struct{
-    int      chunk_len;                   //REQUIRED INPUT: length of chunk in number of samples
-    int      rise_fall_num_samples;       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
-    int      padding_num_samples;         //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
-    int      capacity;                    //memory capacity of chunk_data_ptr
-    int      chunk_size;                  //size of chunk in bytes
-    int      start_idx;                   //starting index of chunk relative to audio data
-    int      end_idx;                     //ending index of chunk relative to audio data
-    int32_t* chunk_data_ptr;              //array of int32_t audio samples
-    int      chunk_data_idx;              //index in chunk where we are currently
-} stp_sd__audio_chunk;
-
-static esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
+esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
 
     char* TAG = "mount sd";
     esp_err_t ret;
@@ -140,7 +87,7 @@ static esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
     return ESP_OK;
 }
 
-static esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
+esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     // All done, unmount partition and disable SPI peripheral
     char* TAG = "unmount SD";
 
@@ -162,11 +109,11 @@ static esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     return ESP_OK;
 }
 
-static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
+esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
 {
     char* TAG = "open audio file";
     //Open file for reading
-    wave_file_ptr->fp = fopen(MOUNT_POINT AUDIO_FILE_PATH, "rb");
+    wave_file_ptr->fp = fopen(strcat("/sdcard", wave_file_ptr->filename), "rb");
     printf("here\n");
 
     if(wave_file_ptr->fp==NULL){
@@ -190,6 +137,7 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     
     if(memcmp("RIFF", wave_file_ptr->RIFF, sizeof(*(wave_file_ptr->RIFF)))){
         ESP_LOGE(TAG, "RIFF does not match!");
+        printf("Count: %i\n", count);
     }
 
     //read filesize
@@ -286,10 +234,67 @@ static esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     return ESP_OK;
 }
 
-//This function selects a "chunk" of specified length from the wave file, beginning at a random start point, with padding after the beginning and before the ending
-static esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavFile* wave_file_ptr){
-    char* TAG = "audio_chunk_cont";
-    audio_chunk->chunk_size = audio_chunk->chunk_len * sizeof(*(audio_chunk->chunk_data_ptr));
+
+/*The below function selects a "chunk" of specified length from the wave file, beginning at a random start point, with padding after the beginning and before the ending
+
+    The selection from the file goes as follows:
+
+                                          M            N                              O                                            P
+                                          |            |                              |                                            |                      EOF                                                                                                                    
+    |<---HEADER-->|<------------------------------------AUDIO DATA IN WAVE FILE--------------------------------------------------------------------------->|
+    |             |<-padding_num_samples->|<-------------------------area of wav file audio eligible for selection---------------->|<-padding_num_samples->|
+    |             |                       |           |<---randomly selected chunk--->|                                            |                       |
+                                          |           |<-----chunk_len_wo_dither----->|                                            |                       |
+
+    Where the indices are as follows, referenced with respect to the beginning of the total wave file:
+        M: start_file_pos_samples   (units: bytes)
+        N: audio_chunk->start_idx   (units: int32_t words)
+        O: audio_chunk->end_idx     (units: int32_t words)
+        P: end_file_pos_samples     (units: bytes)
+    
+
+    The randomly selected chunk is then processed into the following portions:
+        1. Starting dither (Needed to prevent popping with the PCM5102a I2S chip)   (Starting with A_idx)
+        2. Starting cosine ramp (This is the start of the actual audio)             (Starting with B_idx)
+        3. Full scale audio output                                                  (Starting with C_idx)
+        4. Falling cosine ramp                                                      (Starting with D_idx)
+        5. Ending dither                                                            (Starting with E_idx)
+    
+    The last sample is at index (F_idx - 1).
+
+    Where the notes A-F denote indicies in the chunk of the start and end of each segment
+    |-----chunk_data_pos------------------------------------------------------------------------------------------------|            
+                v
+    |<-----------------------------------------------chunk_len_inc_dither---------------------------------------------->|
+                         |<--------------------------chunk_len_wo_dither---------------------->|                       
+    ____________________________________________________________________________________________________________________
+    A                    B                       C                         D                       E                    F
+    | Start Dither       | Cosine Rise           | Full scale audio output | Cosine Fall           | End Dither         |
+    | dither_num_samples | rise_fall_num_samples |                         | rise_fall_num_samples | dither_num_samples |
+                                                    
+                                                 __________________________
+                                                /                           \
+                                        /                                         \
+                                /                                                        \
+    _____________________/                                                                      \_____________________
+*/
+
+esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavFile* wave_file_ptr){
+
+    char* TAG = "audio_chunk_const";
+
+    int A_idx = 0;
+    int B_idx = A_idx + audio_chunk->dither_num_samples;
+    int C_idx = B_idx + audio_chunk->rise_fall_num_samples;
+    int D_idx = B_idx + audio_chunk->chunk_len_wo_dither - audio_chunk->rise_fall_num_samples;
+    int E_idx = B_idx + audio_chunk->chunk_len_wo_dither;
+    int F_idx = E_idx + audio_chunk->dither_num_samples;
+
+    // printf("A_idx: %i\nB_idx: %i\nC_idx: %i\nD_idx: %i\nE_idx: %i\nF_idx: %i\n", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
+
+    audio_chunk->chunk_len_inc_dither = F_idx - A_idx;
+    audio_chunk->chunk_size = (audio_chunk->chunk_len_inc_dither) * sizeof(*(audio_chunk->chunk_data_ptr));
+
     //allocate memory for the audio chunk, if needed
     if(audio_chunk->capacity <= audio_chunk->chunk_size){
         if(audio_chunk->chunk_data_ptr != NULL){
@@ -310,68 +315,79 @@ static esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_s
         return ESP_FAIL;
     }
     /*Get locations of the start- and end- idxs of the allowable space where we can take our audio file from, in no. of bytes from beginning of file, that we can grab our chunk from.*/
-    double start_file_pos_samples = (double)((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + (double)audio_chunk->padding_num_samples;
-    double end_file_pos_samples   = (double)((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   - (double)audio_chunk->padding_num_samples - (double)audio_chunk->chunk_len;
-    double delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
+    int start_file_pos_samples = ((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + audio_chunk->padding_num_samples;
+    int end_file_pos_samples   = ((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   - audio_chunk->padding_num_samples - audio_chunk->chunk_len_wo_dither;
+    int delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
 
-    if ((double)start_file_pos_samples != (int)start_file_pos_samples || (double)end_file_pos_samples != (int)end_file_pos_samples){
-        ESP_LOGE(TAG, "Implicit conversion error with audio chunk!");
-        return ESP_FAIL;
-    }
     if (delta_file_pos_samples < audio_chunk->chunk_size){
         ESP_LOGE(TAG, "Audio chunk is longer than available audio data!  Increase file length, or decrease chunk length or chunk padding.");
         return ESP_FAIL;
     }
     
     bootloader_random_enable();
-
     double random = (double)esp_random() / (double)(pow(2,32)-1);  //convert from uint32_t to double between 0 and 1
-    double chunk_start_pos_samples = round(delta_file_pos_samples * random) + start_file_pos_samples;
-    int chunk_start_pos_samples_int = chunk_start_pos_samples;
+    int  chunk_start_pos_samples = (round(delta_file_pos_samples * random) + start_file_pos_samples);
+    bootloader_random_disable();
 
-    if ((double)chunk_start_pos_samples != (double)chunk_start_pos_samples){
-        ESP_LOGE(TAG, "Implicit conversion error 2 with audio chunk!");
-    }
-    if (chunk_start_pos_samples_int  % 2 == 0){
-        ESP_LOGI(TAG, "ODD");
-        chunk_start_pos_samples_int += 1;    //We must start with an even index so that our right and left channels always line up properly.  It's okay to eat into 1 sample of our padding.
-    }
 
-    int chunk_start_pos_filebytes = (chunk_start_pos_samples_int*sizeof(int32_t));   //The location in the file where our audio chunk will begin
+    if (chunk_start_pos_samples  % 2 != 0){
+        chunk_start_pos_samples += 1;    //We must start with an even index so that our right and left channels always line up properly.  It's okay to eat into 1 sample of our padding.
+    }
+    int chunk_start_pos_filebytes = (chunk_start_pos_samples*sizeof(int32_t));      //The location in the file where our audio chunk will begin
                                                                             
     if(fseek(wave_file_ptr->fp, chunk_start_pos_filebytes, SEEK_SET) != ESP_OK){     //Set file position to the one determined by the random selection
         ESP_LOGE(TAG, "Error setting new file position!");
-        bootloader_random_disable();
         return ESP_FAIL;
     }
-    int num_samples_read = fread(audio_chunk->chunk_data_ptr, sizeof(int32_t), audio_chunk->chunk_len, wave_file_ptr->fp);
 
-    if(num_samples_read != audio_chunk->chunk_len){
+    int num_samples_read = fread((audio_chunk->chunk_data_ptr + B_idx), sizeof(int32_t), audio_chunk->chunk_len_wo_dither, wave_file_ptr->fp); //Fill center of audio chunk
+    if(num_samples_read != audio_chunk->chunk_len_wo_dither){
         ESP_LOGE(TAG, "Not enough samples were read from the file!");
-        bootloader_random_disable();
         return ESP_FAIL;
     }
-    
-    int chunk_end_offset = num_samples_read -1;
-    audio_chunk->start_idx = chunk_start_pos_samples_int - (int)start_file_pos_samples + audio_chunk->padding_num_samples;
+
+    int32_t dither_const = 0;
+    dither_const |= 1;          //Flip LSB positive to add dither for PCM5102a chip
+    for (int i=A_idx; i<B_idx; i++){    //Fill first dither_num_samples of chunk with 1;
+        audio_chunk->chunk_data_ptr[i] = dither_const;
+    }
+    for (int i=E_idx; i<F_idx; i++){   //Fill final dither_num_samples of chunk with 1;
+        audio_chunk->chunk_data_ptr[i] = dither_const;
+    }
+
+    int chunk_end_offset   = num_samples_read - 1;
+    audio_chunk->start_idx = chunk_start_pos_samples - start_file_pos_samples + audio_chunk->padding_num_samples;
     audio_chunk->end_idx   = audio_chunk->start_idx + chunk_end_offset;
+    
+    for (int i = B_idx; i < C_idx; i++){
+        double rise_frac                 = (double)1 - ((double)i - (double)B_idx) / (double)(audio_chunk->rise_fall_num_samples);
+        double cos_ramp                  = pow(cos(rise_frac * M_PI/2), 2);
+        audio_chunk->chunk_data_ptr[i]  *= (double)cos_ramp;
+        // printf("Rise sample: %i | ramp val: %0.10f | Audio File Idx: %i | New Audio Value: %li\n", i - B_idx, cos_ramp, audio_chunk->start_idx+i - B_idx, audio_chunk->chunk_data_ptr[i]);
+    }
+    for (int i = D_idx; i < E_idx; i++){
+        double fall_frac                 = ((double)i - (double)D_idx) / (double)(audio_chunk->rise_fall_num_samples);
+        double cos_ramp                  = pow(cos(fall_frac * M_PI/2), 2);
+        audio_chunk->chunk_data_ptr[i]  *= (double)cos_ramp;
+        // printf("Fall sample: %i | ramp val: %0.10f |Audio File Idx: %i | New Audio Value: %li\n", i - D_idx, cos_ramp, audio_chunk->start_idx+i - B_idx, audio_chunk->chunk_data_ptr[i]);
+    };
 
-    printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nChunk Length: %i\nSample Count: %i\n",
-            audio_chunk->start_idx,
-            audio_chunk->chunk_data_ptr[0],
-            audio_chunk->end_idx,
-            audio_chunk->chunk_data_ptr[chunk_end_offset],
-            audio_chunk->chunk_len,
-            num_samples_read);
-    printf("Random Number: %.3f\n", random);
-
-    bootloader_random_disable();
     ESP_LOGI(TAG, "Successfully loaded new audio chunk");
+
+    printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nidx 500 samples in: %i | Data: %li\nChunk Length: %i\nSample Count: %i\n",
+            audio_chunk->start_idx,
+            audio_chunk->chunk_data_ptr[B_idx],
+            audio_chunk->end_idx,
+            audio_chunk->chunk_data_ptr[E_idx-1],
+            audio_chunk->start_idx+500 - B_idx,
+            audio_chunk->chunk_data_ptr[500],
+            audio_chunk->chunk_len_wo_dither,
+            num_samples_read);
 
     return ESP_OK;
 }
 
-static esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
+esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
 
     if(audio_chunk->chunk_data_ptr != NULL){
         free(audio_chunk->chunk_data_ptr);
@@ -380,7 +396,7 @@ static esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
     return ESP_OK;
 }
 
-static esp_err_t sd_stp__close_audio_file(stp_sd__wavFile* wave_file_ptr){
+esp_err_t sd_stp__close_audio_file(stp_sd__wavFile* wave_file_ptr){
     if (wave_file_ptr->fp != NULL){
         fclose(wave_file_ptr->fp);
     }
@@ -389,68 +405,4 @@ static esp_err_t sd_stp__close_audio_file(stp_sd__wavFile* wave_file_ptr){
 }
 
 
-void app_main(void)
-{
-    char* TAG = "main";
 
-
-    stp_sd__spi_config spi_config ={
-        .open        = false,
-        .mosi_di_pin = PIN_NUM_MOSI,
-        .miso_do_pin = PIN_NUM_MISO,
-        .clk_pin     = PIN_NUM_CLK,
-        .cs_pin      = PIN_NUM_CS,
-        .mount_point = MOUNT_POINT,
-        .card_ptr    = NULL,
-        .host_ptr    = NULL,
-    };
-
-    if(stp_sd__mount_sd_card(&spi_config) != ESP_OK){
-        ESP_LOGE(TAG, "Error Mounting SD Card!");
-        return;
-    }
-
-    stp_sd__wavFile wave_file = {0};  
-
-    if(sd_stp__open_audio_file(&wave_file) != ESP_OK){
-        ESP_LOGE(TAG, "Error Opening Audio File!");
-        return;
-    }
-
-    stp_sd__audio_chunk audio_chunk = {     //All zeroed or NULL parameters are set by the sd_stp__get_audio_chunk function
-        .chunk_len               = 100,
-        .rise_fall_num_samples   = 96,
-        .padding_num_samples     = 10,
-        .capacity                = 0,
-        .start_idx               = 0,
-        .end_idx                 = 0,     
-        .chunk_data_ptr          = NULL,     
-        .chunk_data_idx          = 0,
-    };
-
-    for (int j = 0; j<20; j++){
-
-        if(sd_stp__get_audio_chunk(&audio_chunk, &wave_file) != ESP_OK){
-            ESP_LOGE(TAG, "Error getting audio chunk!");
-            return;
-        };
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    if(sd_stp__destruct_audio_chunk(&audio_chunk) != ESP_OK){
-        ESP_LOGE(TAG, "Error destructing audio chunk!");
-        return;
-    }
-
-    if(sd_stp__close_audio_file(&wave_file) != ESP_OK){
-        ESP_LOGE(TAG, "Error closing audio file!");
-        return;
-    }
-
-    if(stp_sd__unmount_sd_card(&spi_config) != ESP_OK){
-        ESP_LOGE(TAG, "Error unmounting SD card");
-        return;
-    }
-
-    return;
-}
