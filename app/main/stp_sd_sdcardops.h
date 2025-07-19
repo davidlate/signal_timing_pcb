@@ -13,7 +13,7 @@ typedef struct {
     int cs_pin;
     char* mount_point;
     sdmmc_card_t* card_ptr;
-    sdmmc_host_t* host_ptr;
+    sdmmc_host_t host;
 } stp_sd__spi_config;
 
 typedef struct {
@@ -46,6 +46,7 @@ typedef struct {
     int      capacity;                    //memory capacity of chunk_data_ptr
     int      chunk_size;                  //size of chunk in bytes
     int      start_idx;                   //starting index of chunk relative to audio data
+    int      data_idx;                    //current data location idx, not including dither
     int      end_idx;                     //ending index of chunk relative to audio data
     int32_t* chunk_data_ptr;              //array of int32_t audio samples
     int      chunk_data_pos;              //index in audio chunk we currently are, not including dither
@@ -55,16 +56,16 @@ typedef struct {
 
 esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config*);
 esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config*);
-esp_err_t sd_stp__open_audio_file(stp_sd__wavFile*);
+esp_err_t stp_sd__open_audio_file(stp_sd__wavFile*);
 
 /**
  * @brief //This function selects a "chunk" of specified length from the wave file, beginning at a random start point, with padding after the beginning and before the ending
 */
- esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk*, stp_sd__wavFile*);
+ esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk*, stp_sd__wavFile*);
 
 
-esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk*);
-esp_err_t sd_stp__close_audio_file(stp_sd__wavFile*);
+esp_err_t stp_sd__destruct_audio_chunk(stp_sd__audio_chunk*);
+esp_err_t stp_sd__close_audio_file(stp_sd__wavFile*);
 
 
 

@@ -13,17 +13,17 @@
 #include "stp_sd_sdcardops.h"
 #include "stp_i2s_audio_ops.h"
 
-const int    I2S_WS_PIN         = GPIO_NUM_4;      //LCK, LRC, 13 I2S word select io number
-const int    I2S_DOUT_PIN       = GPIO_NUM_5;      //DIN, 12 I2S data out io number
-const int    I2S_BCK_PIN        = GPIO_NUM_6;      //BCK 11  I2S bit clock io number
-const float  VOL_PERCENT        = 100.00;
-const double SAMPLE_RATE        = 96000.00;
-const double DURATION_MS        = 10.00;
-const double AUDIO_RISE_TIME_MS = 1.0;
+// const int    I2S_WS_PIN         = GPIO_NUM_4;      //LCK, LRC, 13 I2S word select io number
+// const int    I2S_DOUT_PIN       = GPIO_NUM_5;      //DIN, 12 I2S data out io number
+// const int    I2S_BCK_PIN        = GPIO_NUM_6;      //BCK 11  I2S bit clock io number
+// const float  VOL_PERCENT        = 100.00;
+// const double SAMPLE_RATE        = 96000.00;
+// const double DURATION_MS        = 10.00;
+// const double AUDIO_RISE_TIME_MS = 1.0;
 
 
-const double NUM_DMA_BUFF  = 5;
-const double SIZE_DMA_BUFF = 500;
+// const double NUM_DMA_BUFF  = 5;
+// const double SIZE_DMA_BUFF = 500;
 
 
 
@@ -40,16 +40,16 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
         return ESP_FAIL;
     }
 
-    int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf;
+    int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * sizeof(int32_t);
+    i2s_config_ptr->buf_len = write_buffer_size_bytes / sizeof(int32_t);
 
     i2s_config_ptr->buf_ptr = malloc(write_buffer_size_bytes*2);
     if (i2s_config_ptr->buf_ptr == NULL){
         ESP_LOGE(TAG, "Error allocating memory for i2s write buffer");
         return ESP_FAIL;
     }
+    assert(i2s_config_ptr->buf_ptr);
     i2s_config_ptr->buf_capacity = write_buffer_size_bytes*2;
-
-
 
     i2s_chan_config_t tx_chan_cfg = {
         .id = I2S_NUM_AUTO,
@@ -59,11 +59,12 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
         .auto_clear_before_cb = true,
     };
 
-    if(i2s_new_channel(&tx_chan_cfg, i2s_config_ptr->chan_ptr, NULL) != ESP_OK){
+
+    if(i2s_new_channel(&tx_chan_cfg, &(i2s_config_ptr->tx_chan), NULL) != ESP_OK){
         ESP_LOGE(TAG, "Error creating I2S channel!");
         return ESP_FAIL;
     }
-
+    
     i2s_std_config_t tx_std_cfg = {
     .clk_cfg    = { 
                     .sample_rate_hz = i2s_config_ptr->sample_rate_Hz,
@@ -95,11 +96,10 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
             },
         }
     };
-    if(i2s_channel_init_std_mode(*(i2s_config_ptr->chan_ptr), &tx_std_cfg) != ESP_OK){
+    if(i2s_channel_init_std_mode(i2s_config_ptr->tx_chan, &tx_std_cfg) != ESP_OK){
         ESP_LOGE(TAG, "Error initializing i2s channel!");
         return ESP_FAIL;
     }
-
     return ESP_OK;
 }
 
@@ -131,6 +131,25 @@ esp_err_t stp_i2s__set_vol_scale_factor(stp_i2s__i2s_config* i2s_config_ptr, dou
     return ESP_OK;
 };
 
+esp_err_t stp_i2s__i2s_channel_enable(stp_i2s__i2s_config* i2s_config_ptr){
+    char* TAG = "i2s_enable";
+    if(i2s_channel_enable(i2s_config_ptr->tx_chan) != ESP_OK){
+        ESP_LOGE(TAG, "Error enabling channel");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+};
+
+esp_err_t stp_i2s__i2s_channel_disable(stp_i2s__i2s_config* i2s_config_ptr){
+    char* TAG = "i2s_enable";
+    if(i2s_channel_disable(i2s_config_ptr->tx_chan) != ESP_OK){
+        ESP_LOGE(TAG, "Error disabling channel");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+};
+
+
 esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc){
     char* TAG = "i2s_play";
 
@@ -143,45 +162,62 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
             return ESP_FAIL;
         }
     }
+    printf("Postload audio pos: %i\n", audio_chunk_ptr->chunk_data_pos);
 
-    while(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither){
-
+    while(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
+    {
         int buf_pos = 0;
-        for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++){
-            if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither){
-
+        for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++)
+        {
+            if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
+            {
                 double sample = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
-                int32_t scaled_sample = (int32_t)(sample * i2s_config_ptr->vol_scale_factor);
+                double test_scaled_sample = sample * i2s_config_ptr->vol_scale_factor;
+                int32_t scaled_sample = (int32_t)(sample * .2);//i2s_config_ptr->vol_scale_factor);
                 i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
+                if(buf_pos == 10){
+                    printf("Postload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
+                }
+                audio_chunk_ptr->chunk_data_pos++;
+                audio_chunk_ptr->data_idx++;
+                // printf("sample: %.3f, Test_scaled: %.3f, Scaled_sample: %li, volume: %.3f\n", sample, test_scaled_sample, scaled_sample, i2s_config_ptr->vol_scale_factor);
             }
-            else{
-                // i2s_config_ptr->buf_ptr[i] = dither_const;
-                printf("Audio at end of chunk\n");
-                break;
+            else
+            {
+                i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
+                // printf("Audio at end of chunk\n");
+                // break;
             }
         }
+        // printf("Buffer capacity: %i samples\n", i2s_config_ptr->buf_capacity);
         size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
         size_t bytes_written = 0;
-        esp_err_t ret = i2s_channel_write(*(i2s_config_ptr->chan_ptr),
-                                          i2s_config_ptr->buf_ptr,
-                                          bytes_to_write,
-                                          &bytes_written,
-                                          portMAX_DELAY);
-
-        if(ret != ESP_OK){
-            ESP_LOGE(TAG, "i2s write failed!");
-            return ESP_FAIL;
-        }
-        if(bytes_written != bytes_to_write){
-            ESP_LOGE(TAG, "Not enough bytes written to i2s bus!");
-            return ESP_FAIL;
-        }
-        //Increment position of audio chunk
-        audio_chunk_ptr->chunk_data_pos += bytes_written / sizeof(*(audio_chunk_ptr->chunk_data_ptr));
+        printf("postload samples to write: %i\n", bytes_to_write/sizeof(int32_t));
+        for(int i=0; i<1; i++){
+            esp_err_t ret = i2s_channel_write(i2s_config_ptr->tx_chan,
+                                            i2s_config_ptr->buf_ptr,
+                                            bytes_to_write,
+                                            &bytes_written,
+                                            portMAX_DELAY);
+            printf("Bytes written: %i\n", bytes_written);
+        };
+        // if(ret != ESP_OK){
+        //     ESP_LOGE(TAG, "i2s write failed!");
+        //     return ESP_FAIL;
+        // }
+        // if(bytes_written != bytes_to_write){
+        //     ESP_LOGE(TAG, "Not enough bytes written to i2s bus!");
+        //     return ESP_FAIL;
+        // }
+        // printf("Bytes to write: %i\n", bytes_to_write);
         //Let ESP do something else in between writes
-        vTaskDelay(pdMS_TO_TICKS(i2s_config_ptr->ms_delay_between_writes));
+        // vTaskDelay(pdMS_TO_TICKS(i2s_config_ptr->ms_delay_between_writes));
+        // printf("Here\n");
     }
     i2s_config_ptr->preloaded = false;
+    audio_chunk_ptr->chunk_data_pos = 0;
+    audio_chunk_ptr->data_idx = audio_chunk_ptr->start_idx;
+
     return ESP_OK;
 }
 
@@ -197,28 +233,40 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         return ESP_FAIL;
     };
 
+    audio_chunk_ptr->chunk_data_pos = 0;
+    audio_chunk_ptr->data_idx = audio_chunk_ptr->start_idx;
+
     if(stp_i2s__set_vol_scale_factor(i2s_config_ptr, set_vol_perc) != ESP_OK){
         ESP_LOGE(TAG, "Error setting volume!");
         return ESP_FAIL;
     }
     int buf_pos = 0;
-    for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++){
-        if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither){
-
+    for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++)
+    {
+        if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
+        {
             double sample = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
-            int32_t scaled_sample = (int32_t)(sample * i2s_config_ptr->vol_scale_factor);
+            double test_scaled_sample = sample * i2s_config_ptr->vol_scale_factor;
+            int32_t scaled_sample = (int32_t)(sample * .2);//i2s_config_ptr->vol_scale_factor);
             i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
+            if(buf_pos == 960){
+                printf("Preload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
+            }
+            audio_chunk_ptr->chunk_data_pos++;
+            audio_chunk_ptr->data_idx++;
+            // printf("sample: %.3f, Test_scaled: %.3f, Scaled_sample: %li, volume: %.3f\n", sample, test_scaled_sample, scaled_sample, i2s_config_ptr->vol_scale_factor);
         }
-        else{
-            // i2s_config_ptr->buf_ptr[i] = dither_const;
-            printf("Audio at end of chunk\n");
-            break;
+        else
+        {
+            i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
+            printf("Check Preload Function!!!\n");
+            // break;
         }
     }
     size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
     size_t bytes_written = 0;
-    do{
-    esp_err_t ret = i2s_channel_preload_data(*(i2s_config_ptr->chan_ptr),
+
+    esp_err_t ret = i2s_channel_preload_data(i2s_config_ptr->tx_chan,
                                              i2s_config_ptr->buf_ptr,
                                              bytes_to_write,
                                              &bytes_written);
@@ -226,107 +274,9 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         ESP_LOGE(TAG, "i2s preload failed!");
         return ESP_FAIL;
     }
-    } while(bytes_written != 0);
-    //Increment position of audio chunk
-    audio_chunk_ptr->chunk_data_pos += bytes_written / sizeof(*(audio_chunk_ptr->chunk_data_ptr));
+    
     //Let ESP do something else in between writes
     i2s_config_ptr->preloaded = true;
+    printf("Preload audio pos: %i\n", audio_chunk_ptr->chunk_data_pos);
     return ESP_OK;
-}
-
-
-
-    // while (buff_pos < buff_len && audio_pos < audio_len){        //Filling up a new buffer
-    //     write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
-    //     audio_pos++;
-    //     buff_pos++;
-    // }
-
-    // bytes_to_write = buff_pos*sizeof(int32_t);
-
-    // // i2s_channel_enable(i2s_chan);
-    // /*This is the main part of the task that will run continuously, blocking until the ISR is triggered*/
-
-    // while (true){
-    //     if(xQueueReceive(i2s_queue, &passthrough_data, portMAX_DELAY)){     //Wait forever until audio ISR triggers
-
-    //         while(actual_audio_pos < audio_len){                                       //While the audio has not been fully transmitted (position in the audio file is less than the audio file's length)
-    //             audio_pos = actual_audio_pos;
-    //             buff_pos = 0;
-    //             // vol_lin = *volume_lin_ptr;
-    //             vol_lin = .5;
-
-    //             // printf("Vol lin: %0.5f\n", vol_lin);
-    //             while (buff_pos < buff_len && audio_pos < audio_len){                                    //overwrite to create a new buffer of the next buff_len number of audio samples
-    //                 write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
-    //                 audio_pos++;
-    //                 buff_pos++;
-    //                 if(fabs(write_buff_ptr[buff_pos]) >= (BITS_IN_32BIT/8)*7) printf("Error\n");
-    //             }
-    //             // printf("val: %li\n", write_buff_ptr[buff_len/2]);
-    //             // printf("Criteria: %li\n", (BITS_IN_32BIT/8)*7);
-    //             bytes_to_write = buff_pos * sizeof(int32_t);                                              //Set to 0 now in case I forget to this this later:)            
-    //             i2s_channel_write(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written, portMAX_DELAY); 
-
-    //             actual_audio_pos += bytes_written / sizeof(int32_t);
-    //             // printf("i2swrite: Actual pos: %i | Audio len: %i\n | bytes written: %i\n", actual_audio_pos, audio_len, bytes_written);
-    //         }
-    //         printf("Played sound!\n");
-
-    //         actual_audio_pos = 0;
-    //         audio_pos     = 0;                                                  //Prepare for next ISR to trigger by resetting audio_pos to 0
-    //         words_written = 0;                                                  //words_written to 0
-    //         buff_pos = 0;
-
-
-    //         while (buff_pos < buff_len && audio_pos < audio_len){        //Filling up a new buffer
-    //             write_buff_ptr[buff_pos] = (int32_t)(vol_lin * (double)audio_data_ptr[audio_pos]);
-    //             audio_pos++;
-    //             buff_pos++;
-    //         }
-            
-    //         bytes_to_write = buff_pos*sizeof(int32_t);
-    //         do{
-    //             i2s_channel_preload_data(i2s_chan, write_buff_ptr, bytes_to_write, &bytes_written); //And pre-loading the buffer to transmit instantly upon the next ISR call
-    //             bytes_to_write -= bytes_written;
-    //             actual_audio_pos += bytes_written / sizeof(int32_t);
-    //         }
-    //         while(bytes_to_write>0 && bytes_written>0);
-
-    //     }
-    // }
-
-
-void app_main(void)
-{
-    stp_i2s__i2s_config i2s_config = {
-                        .chan_ptr                 = NULL,                           //Channel handle for current I2S channel
-                        .buf_ptr                  = NULL,                           //Array for write buffer
-                        .buf_capacity             = 0,
-                        .buf_len                  = 0,
-                        .num_dma_buf              = NUM_DMA_BUFF,
-                        .size_dma_buf             = SIZE_DMA_BUFF,
-                        .num_samples_dither       = 10,
-                        .ms_delay_between_writes  = 2,
-                        .bclk_pin                 = I2S_BCK_PIN,    
-                        .ws_pin                   = I2S_WS_PIN,
-                        .dout_pin                 = I2S_DOUT_PIN,
-                        .sample_rate_Hz           = SAMPLE_RATE,
-                        .max_vol_dBFS             = -20,
-                        .min_vol_dB_rel_to_max    = -60,
-                        .set_vol_percent          = 10,
-                        .vol_scale_factor         = 0,
-                        .min_vol_percent          = 2,
-                        .actual_dbFS              = 0,
-                        .preloaded                = false
-                        };
-
-    stp_i2s__i2s_channel_setup(&i2s_config);
-
-    while(true){
-        printf("Running...\n");
-        // printf("Number of gpTimer Calls: %i\n", *(i2s_waveform_definition_struct.signal_idx_ptr));
-        vTaskDelay(pdMS_TO_TICKS(5000));
-    }
-
 }

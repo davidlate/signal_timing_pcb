@@ -9,7 +9,6 @@
 #include <string.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
-#include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "sd_test_io.h"
 #include <stdio.h>
@@ -19,6 +18,7 @@
 #include "esp_random.h"
 #include "bootloader_random.h"
 #include "math.h"
+#include "esp_vfs_fat.h"
 
 #include "stp_sd_sdcardops.h"
 
@@ -38,7 +38,7 @@ esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
     ESP_LOGI(TAG, "Using SPI peripheral");
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    spi_config_ptr->host_ptr = &host;
+    spi_config_ptr->host = host;
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = spi_config_ptr->mosi_di_pin,
         .miso_io_num = spi_config_ptr->miso_do_pin,
@@ -47,17 +47,19 @@ esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
         .quadhd_io_num = -1,
         .max_transfer_sz = 4000,
     };
+    
     ret = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize bus.");
-        return ESP_FAIL;
+        ESP_ERROR_CHECK(spi_bus_free(host.slot));
+        ESP_ERROR_CHECK(spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA));
+        // return ESP_FAIL;
     }
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = spi_config_ptr->cs_pin;
-    slot_config.host_id = (spi_config_ptr->host_ptr)->slot;
+    slot_config.host_id = (spi_config_ptr->host).slot;
 
     ESP_LOGI(TAG, "Mounting filesystem");
-    ret = esp_vfs_fat_sdspi_mount(spi_config_ptr->mount_point, spi_config_ptr->host_ptr, &slot_config, &mount_config, &(spi_config_ptr->card_ptr));
+    ret = esp_vfs_fat_sdspi_mount(spi_config_ptr->mount_point, &(spi_config_ptr->host), &slot_config, &mount_config, &(spi_config_ptr->card_ptr));
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -97,7 +99,7 @@ esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     }
 
     //deinitialize the bus after all devices are removed
-    if(spi_bus_free((spi_config_ptr->host_ptr)->slot) != ESP_OK){
+    if(spi_bus_free((spi_config_ptr->host).slot) != ESP_OK){
         ESP_LOGE(TAG, "Error freeing SPI bus");
         return ESP_FAIL;
     }
@@ -109,7 +111,7 @@ esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     return ESP_OK;
 }
 
-esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
+esp_err_t stp_sd__open_audio_file(stp_sd__wavFile* wave_file_ptr)
 {
     char* TAG = "open audio file";
     //Open file for reading
@@ -279,7 +281,7 @@ esp_err_t sd_stp__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     _____________________/                                                                      \_____________________
 */
 
-esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavFile* wave_file_ptr){
+esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavFile* wave_file_ptr){
 
     char* TAG = "audio_chunk_const";
 
@@ -315,9 +317,9 @@ esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
         return ESP_FAIL;
     }
     /*Get locations of the start- and end- idxs of the allowable space where we can take our audio file from, in no. of bytes from beginning of file, that we can grab our chunk from.*/
-    int start_file_pos_samples = ((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + audio_chunk->padding_num_samples;
-    int end_file_pos_samples   = ((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   - audio_chunk->padding_num_samples - audio_chunk->chunk_len_wo_dither;
-    int delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
+    long int start_file_pos_samples = ((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + audio_chunk->padding_num_samples;
+    long int end_file_pos_samples   = ((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   - audio_chunk->padding_num_samples - audio_chunk->chunk_len_wo_dither;
+    long int delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
 
     if (delta_file_pos_samples < audio_chunk->chunk_size){
         ESP_LOGE(TAG, "Audio chunk is longer than available audio data!  Increase file length, or decrease chunk length or chunk padding.");
@@ -326,16 +328,20 @@ esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
     
     bootloader_random_enable();
     double random = (double)esp_random() / (double)(pow(2,32)-1);  //convert from uint32_t to double between 0 and 1
-    int  chunk_start_pos_samples = (round(delta_file_pos_samples * random) + start_file_pos_samples);
+    long int  chunk_start_pos_samples = (round(delta_file_pos_samples * random) + start_file_pos_samples);
     bootloader_random_disable();
 
 
     if (chunk_start_pos_samples  % 2 != 0){
         chunk_start_pos_samples += 1;    //We must start with an even index so that our right and left channels always line up properly.  It's okay to eat into 1 sample of our padding.
     }
-    int chunk_start_pos_filebytes = (chunk_start_pos_samples*sizeof(int32_t));      //The location in the file where our audio chunk will begin
-                                                                            
-    if(fseek(wave_file_ptr->fp, chunk_start_pos_filebytes, SEEK_SET) != ESP_OK){     //Set file position to the one determined by the random selection
+
+    long chunk_start_pos_filebytes = (chunk_start_pos_samples*sizeof(int32_t));      //The location in the file where our audio chunk will begin
+    
+    // printf("Start pos bytes: %li\n", chunk_start_pos_filebytes);
+
+    int ret = fseek(wave_file_ptr->fp, chunk_start_pos_filebytes, SEEK_SET);
+    if (ret != ESP_OK){     //Set file position to the one determined by the random selection
         ESP_LOGE(TAG, "Error setting new file position!");
         return ESP_FAIL;
     }
@@ -355,10 +361,11 @@ esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
         audio_chunk->chunk_data_ptr[i] = dither_const;
     }
 
-    int chunk_end_offset   = num_samples_read - 1;
-    audio_chunk->start_idx = chunk_start_pos_samples - start_file_pos_samples + audio_chunk->padding_num_samples;
-    audio_chunk->end_idx   = audio_chunk->start_idx + chunk_end_offset;
-    
+    int chunk_end_offset    = num_samples_read - 1;
+    audio_chunk->start_idx  = chunk_start_pos_samples - start_file_pos_samples + audio_chunk->padding_num_samples;
+    audio_chunk->end_idx    = audio_chunk->start_idx + chunk_end_offset;
+    audio_chunk->data_idx   = audio_chunk->start_idx;
+
     for (int i = B_idx; i < C_idx; i++){
         double rise_frac                 = (double)1 - ((double)i - (double)B_idx) / (double)(audio_chunk->rise_fall_num_samples);
         double cos_ramp                  = pow(cos(rise_frac * M_PI/2), 2);
@@ -374,20 +381,20 @@ esp_err_t sd_stp__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
 
     ESP_LOGI(TAG, "Successfully loaded new audio chunk");
 
-    printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nidx 500 samples in: %i | Data: %li\nChunk Length: %i\nSample Count: %i\n",
-            audio_chunk->start_idx,
-            audio_chunk->chunk_data_ptr[B_idx],
-            audio_chunk->end_idx,
-            audio_chunk->chunk_data_ptr[E_idx-1],
-            audio_chunk->start_idx+500 - B_idx,
-            audio_chunk->chunk_data_ptr[500],
-            audio_chunk->chunk_len_wo_dither,
-            num_samples_read);
+    // printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nidx 500 samples in: %i | Data: %li\nChunk Length: %i\nSample Count: %i\n",
+    //         audio_chunk->start_idx,
+    //         audio_chunk->chunk_data_ptr[B_idx],
+    //         audio_chunk->end_idx,
+    //         audio_chunk->chunk_data_ptr[E_idx-1],
+    //         audio_chunk->start_idx+500 - B_idx,
+    //         audio_chunk->chunk_data_ptr[500],
+    //         audio_chunk->chunk_len_wo_dither,
+    //         num_samples_read);
 
     return ESP_OK;
 }
 
-esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
+esp_err_t stp_sd__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
 
     if(audio_chunk->chunk_data_ptr != NULL){
         free(audio_chunk->chunk_data_ptr);
@@ -396,7 +403,7 @@ esp_err_t sd_stp__destruct_audio_chunk(stp_sd__audio_chunk* audio_chunk){
     return ESP_OK;
 }
 
-esp_err_t sd_stp__close_audio_file(stp_sd__wavFile* wave_file_ptr){
+esp_err_t stp_sd__close_audio_file(stp_sd__wavFile* wave_file_ptr){
     if (wave_file_ptr->fp != NULL){
         fclose(wave_file_ptr->fp);
     }

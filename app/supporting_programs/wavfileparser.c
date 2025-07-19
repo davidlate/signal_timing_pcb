@@ -32,7 +32,7 @@ typedef struct{
 
 
 int main(int argc, char** argv){
-    fp = fopen("E:\\\audio_file.wav", "rb");
+    fp = fopen("SINEA.wav", "rb");
     if (fp==NULL){
         fprintf(stderr, "File not Opened!");
         return 1;
