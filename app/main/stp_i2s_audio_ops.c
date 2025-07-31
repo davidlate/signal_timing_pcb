@@ -40,7 +40,7 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
         return ESP_FAIL;
     }
 
-    int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * sizeof(int32_t);
+    int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * sizeof(int32_t) * 2;
     i2s_config_ptr->buf_len = write_buffer_size_bytes / sizeof(int32_t);
 
     i2s_config_ptr->buf_ptr = malloc(write_buffer_size_bytes*2);
@@ -108,7 +108,7 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
 
 // esp_err_t i2s_channel_disable(i2s_chan);                                                 //Audio file has been fully transmitted.  Disable the channel to allow new data to be preloaded
 
-esp_err_t stp_i2s__set_vol_scale_factor(stp_i2s__i2s_config* i2s_config_ptr, double set_vol_perc){
+esp_err_t stp_i2s__set_vol_scale_factor(stp_i2s__i2s_config* i2s_config_ptr, double set_vol_perc){ //TODO fix this
     char* TAG = "get_vol_scale";
 
     if (set_vol_perc < 0 || set_vol_perc > 100){
@@ -173,7 +173,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
             {
                 double sample = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
                 double test_scaled_sample = sample * i2s_config_ptr->vol_scale_factor;
-                int32_t scaled_sample = (int32_t)(sample * .2);//i2s_config_ptr->vol_scale_factor);
+                int32_t scaled_sample = (int32_t)(sample * .1);//i2s_config_ptr->vol_scale_factor);
                 i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
                 if(buf_pos == 10){
                     printf("Postload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
@@ -193,26 +193,24 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
         size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
         size_t bytes_written = 0;
         printf("postload samples to write: %i\n", bytes_to_write/sizeof(int32_t));
-        for(int i=0; i<1; i++){
-            esp_err_t ret = i2s_channel_write(i2s_config_ptr->tx_chan,
-                                            i2s_config_ptr->buf_ptr,
-                                            bytes_to_write,
-                                            &bytes_written,
-                                            portMAX_DELAY);
-            printf("Bytes written: %i\n", bytes_written);
-        };
-        // if(ret != ESP_OK){
-        //     ESP_LOGE(TAG, "i2s write failed!");
-        //     return ESP_FAIL;
-        // }
-        // if(bytes_written != bytes_to_write){
-        //     ESP_LOGE(TAG, "Not enough bytes written to i2s bus!");
-        //     return ESP_FAIL;
-        // }
-        // printf("Bytes to write: %i\n", bytes_to_write);
-        //Let ESP do something else in between writes
-        // vTaskDelay(pdMS_TO_TICKS(i2s_config_ptr->ms_delay_between_writes));
-        // printf("Here\n");
+        esp_err_t ret = i2s_channel_write(i2s_config_ptr->tx_chan,
+                                        i2s_config_ptr->buf_ptr,
+                                        bytes_to_write,
+                                        &bytes_written,
+                                        portMAX_DELAY);
+        printf("Bytes written: %i\n", bytes_written);
+
+        if(ret != ESP_OK){
+            ESP_LOGE(TAG, "i2s write failed!");
+            return ESP_FAIL;
+        }
+        if(bytes_written != bytes_to_write){
+            ESP_LOGE(TAG, "Not enough bytes written to i2s bus!");
+            return ESP_FAIL;
+        }
+        printf("Bytes to write: %i\n", bytes_to_write);
+        // Let ESP do something else in between writes
+        vTaskDelay(pdMS_TO_TICKS(i2s_config_ptr->ms_delay_between_writes));
     }
     i2s_config_ptr->preloaded = false;
     audio_chunk_ptr->chunk_data_pos = 0;
@@ -247,7 +245,7 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         {
             double sample = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
             double test_scaled_sample = sample * i2s_config_ptr->vol_scale_factor;
-            int32_t scaled_sample = (int32_t)(sample * .2);//i2s_config_ptr->vol_scale_factor);
+            int32_t scaled_sample = (int32_t)(sample * .1);//i2s_config_ptr->vol_scale_factor);
             i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
             if(buf_pos == 960){
                 printf("Preload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
@@ -260,21 +258,26 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         {
             i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
             printf("Check Preload Function!!!\n");
+            printf("audio_chunk_ptr->chunk_data_pos: %i\n", audio_chunk_ptr->chunk_data_pos);
+            printf("audio_chunk_ptr->chunk_len_inc_dither: %i\n", audio_chunk_ptr->chunk_len_inc_dither);
+
             // break;
         }
     }
     size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
     size_t bytes_written = 0;
-
+    size_t buffer_bytes = 0;
     esp_err_t ret = i2s_channel_preload_data(i2s_config_ptr->tx_chan,
                                              i2s_config_ptr->buf_ptr,
                                              bytes_to_write,
                                              &bytes_written);
+    buffer_bytes += bytes_written;
     if(ret != ESP_OK){
         ESP_LOGE(TAG, "i2s preload failed!");
         return ESP_FAIL;
     }
-    
+
+    printf("Buffer bytes: %i\n", buffer_bytes);
     //Let ESP do something else in between writes
     i2s_config_ptr->preloaded = true;
     printf("Preload audio pos: %i\n", audio_chunk_ptr->chunk_data_pos);
