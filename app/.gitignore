@@ -2,11 +2,9 @@
 .vscode
 build
 .clangd
-.gitignroe
-CMakeLists*
+.gitignore
 dependencies.lock
 pytest*
-sdkconfig*
 idf_component*
 Kconfig*
 fileparser

@@ -79,9 +79,9 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
                 .ws_width       = I2S_DATA_BIT_WIDTH_32BIT,
                 .ws_pol         = 0,
                 .bit_shift      = 0,
-                .left_align     = 1,
-                .big_endian     = 0,
-                .bit_order_lsb  = 0 
+                // .left_align     = 1,
+                // .big_endian     = 0,
+                // .bit_order_lsb  = 0 
                 },
     .gpio_cfg = {
         .mclk   = I2S_GPIO_UNUSED,

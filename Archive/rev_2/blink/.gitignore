@@ -1,7 +1,0 @@
-sdkconfig.*
-.devcontainer*
-.vscode*
-build*
-
-pytest_blink.py
-managed_components

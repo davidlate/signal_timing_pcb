@@ -17,7 +17,6 @@
 #include <dirent.h> 
 #include <inttypes.h>
 #include "esp_random.h"
-#include "bootloader_random.h"
 #include "math.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
@@ -34,7 +33,7 @@
 #define PIN_NUM_CS    GPIO_NUM_10   //CS
 
 //General IO defines
-#define LED1_PIN    GPIO_NUM_48
+#define LED1_PIN    48          //GPIO enums only go up to 38, annoyingly
 #define LED2_PIN    GPIO_NUM_38
 #define XSMT_PIN    GPIO_NUM_7
 #define B1_PIN      GPIO_NUM_35
@@ -142,7 +141,7 @@ void app_main(void)
         .chunk_len_wo_dither     = 1920,    //10ms per channel
         .rise_fall_num_samples   = 192,     //1ms rise/fall per channel
         .padding_num_samples     = 100,     //10 samples file padding
-        .dither_num_samples      = 5760,    //PCM5102a needs ~30ms of dither to fully power on
+        .dither_num_samples      = 11400,    //PCM5102a needs ~30ms of dither to fully power on
         .capacity                = 0,
         .start_idx               = 0,
         .data_idx                = 0,

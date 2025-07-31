@@ -1,3 +1,7 @@
 {
-    "idf.pythonInstallPath": "/home/davidlate/miniconda3/bin/python"
+    "idf.pythonInstallPath": "/home/davidlate/miniconda3/bin/python",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ],
+    "idf.port": "/dev/ttyACM0"
 }
