@@ -292,7 +292,7 @@ esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
     int E_idx = B_idx + audio_chunk->chunk_len_wo_dither;
     int F_idx = E_idx + audio_chunk->dither_num_samples;
 
-    // printf("A_idx: %i\nB_idx: %i\nC_idx: %i\nD_idx: %i\nE_idx: %i\nF_idx: %i\n", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
+    printf("A_idx: %i | B_idx: %i | C_idx: %i | D_idx: %i | E_idx: %i | F_idx: %i\n", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
 
     audio_chunk->chunk_len_inc_dither = F_idx - A_idx;
     audio_chunk->chunk_size = (audio_chunk->chunk_len_inc_dither) * sizeof(*(audio_chunk->chunk_data_ptr));
@@ -352,13 +352,17 @@ esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
         return ESP_FAIL;
     }
 
-    int32_t dither_const = 0;
-    dither_const |= 1;          //Flip LSB positive to add dither for PCM5102a chip
-    for (int i=A_idx; i<B_idx; i++){    //Fill first dither_num_samples of chunk with 1;
-        audio_chunk->chunk_data_ptr[i] = dither_const;
+    int32_t dither_const = 10; //Flip LSB positive to add dither for PCM5102a chip
+
+    for (int i=A_idx; i<B_idx; i+=2){    //Fill first dither_num_samples of chunk with 1;
+        audio_chunk->chunk_data_ptr[i]   = dither_const;
+        audio_chunk->chunk_data_ptr[i+1] = dither_const;
+        dither_const *= -1;
     }
-    for (int i=E_idx; i<F_idx; i++){   //Fill final dither_num_samples of chunk with 1;
+    for (int i=E_idx; i<F_idx; i+=2){   //Fill final dither_num_samples of chunk with 1;
         audio_chunk->chunk_data_ptr[i] = dither_const;
+        audio_chunk->chunk_data_ptr[i+1] = dither_const;
+        dither_const *= -1;
     }
 
     int chunk_end_offset    = num_samples_read - 1;

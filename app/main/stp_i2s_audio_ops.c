@@ -153,9 +153,6 @@ esp_err_t stp_i2s__i2s_channel_disable(stp_i2s__i2s_config* i2s_config_ptr){
 esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc){
     char* TAG = "i2s_play";
 
-    int32_t dither_const = 0;
-    dither_const |= 1;          //Flip LSB positive to add dither for PCM5102a chip
-
     if(!i2s_config_ptr->preloaded){     //Set volume scaling factor, only if not already preloaded.
         if(stp_i2s__set_vol_scale_factor(i2s_config_ptr, set_vol_perc) != ESP_OK){
             ESP_LOGE(TAG, "Error setting volume!");
@@ -225,8 +222,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
 esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc){
     
     char* TAG = "i2s_preload";
-    int32_t dither_const = 0;
-    dither_const |= 1;          //Flip LSB positive to add dither for PCM5102a chip
+
     if(i2s_config_ptr->preloaded){     //Set volume scaling factor, only if not already preloaded.
         ESP_LOGE(TAG, "I2S buffer already preloaded!");
         return ESP_FAIL;
@@ -255,11 +251,10 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
             audio_chunk_ptr->chunk_data_pos++;
             audio_chunk_ptr->data_idx++;
             chunk_samples_loaded++;
-            // printf("sample: %.3f, Test_scaled: %.3f, Scaled_sample: %li, volume: %.3f\n", sample, test_scaled_sample, scaled_sample, i2s_config_ptr->vol_scale_factor);
         }
         else
         {
-            i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
+            // i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
             printf("Audio Data is longer than DMA Buffer!\n");
             printf("audio_chunk_ptr->chunk_data_pos: %i\n", audio_chunk_ptr->chunk_data_pos);
             printf("audio_chunk_ptr->chunk_len_inc_dither: %i\n", audio_chunk_ptr->chunk_len_inc_dither);
