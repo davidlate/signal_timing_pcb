@@ -73,7 +73,7 @@
 
 const int SAMPLE_RATE    = 96000;
 const int NUM_DMA_BUFF   = 5;
-const int SIZE_DMA_BUFF  = 500;
+const int SIZE_DMA_BUFF  = 250;         //can go up to 500
 
 
 void flash_lights(void * pvParameters){
@@ -138,10 +138,10 @@ void app_main(void)
     }
 
     stp_sd__audio_chunk audio_chunk = {     //All zeroed or NULL parameters are set by the sd_stp__get_audio_chunk function
-        .chunk_len_wo_dither     = 1920,    //10ms per channel
-        .rise_fall_num_samples   = 192,     //1ms rise/fall per channel
+        .chunk_len_wo_dither     = 5760,    //10ms per channel
+        .rise_fall_num_samples   = 0,     //1ms rise/fall per channel
         .padding_num_samples     = 100,     //10 samples file padding
-        .dither_num_samples      = 11400,    //PCM5102a needs ~30ms of dither to fully power on
+        .dither_num_samples      = 400,    //PCM5102a needs ~30ms of dither to fully power on  Check the Scope, dither is totally messed up TODO fix
         .capacity                = 0,
         .start_idx               = 0,
         .data_idx                = 0,
@@ -174,17 +174,17 @@ void app_main(void)
         ESP_LOGE(TAG, "Error setting up i2s audio channel!");
         // return;
     };
+    gpio_set_level(XSMT_PIN, 1);
 
     for(int i=0; i<500; i++){
 
         ESP_ERROR_CHECK(stp_sd__get_audio_chunk(&audio_chunk, &wave_file));
-        // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
+        ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
+        vTaskDelay(pdMS_TO_TICKS(200));
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
-        gpio_set_level(XSMT_PIN, 1);
         ESP_ERROR_CHECK(stp_i2s__play_audio_chunk(&i2s_config, &audio_chunk, 20.0));
         vTaskDelay(pdMS_TO_TICKS(100));
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_disable(&i2s_config));
-        gpio_set_level(XSMT_PIN, 0);
         vTaskDelay(pdMS_TO_TICKS(100));
 
     }

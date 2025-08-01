@@ -40,7 +40,7 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
         return ESP_FAIL;
     }
 
-    int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * sizeof(int32_t) * 2;
+    int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * sizeof(int32_t) * 4;
     i2s_config_ptr->buf_len = write_buffer_size_bytes / sizeof(int32_t);
 
     i2s_config_ptr->buf_ptr = malloc(write_buffer_size_bytes*2);
@@ -225,7 +225,6 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
     char* TAG = "i2s_preload";
     int32_t dither_const = 0;
     dither_const |= 1;          //Flip LSB positive to add dither for PCM5102a chip
-
     if(i2s_config_ptr->preloaded){     //Set volume scaling factor, only if not already preloaded.
         ESP_LOGE(TAG, "I2S buffer already preloaded!");
         return ESP_FAIL;
@@ -257,27 +256,39 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         else
         {
             i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
-            printf("Check Preload Function!!!\n");
+            printf("Audio Data is longer than DMA Buffer!\n");
             printf("audio_chunk_ptr->chunk_data_pos: %i\n", audio_chunk_ptr->chunk_data_pos);
             printf("audio_chunk_ptr->chunk_len_inc_dither: %i\n", audio_chunk_ptr->chunk_len_inc_dither);
-
-            // break;
+            break;
         }
     }
     size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
     size_t bytes_written = 0;
     size_t buffer_bytes = 0;
-    esp_err_t ret = i2s_channel_preload_data(i2s_config_ptr->tx_chan,
+    size_t num_preload_loops = 0;
+    esp_err_t ret;
+
+    for (int i = 0; i<2; i++){
+    ret = i2s_channel_preload_data(i2s_config_ptr->tx_chan,
                                              i2s_config_ptr->buf_ptr,
                                              bytes_to_write,
                                              &bytes_written);
+    
     buffer_bytes += bytes_written;
+    num_preload_loops++;
+    }
     if(ret != ESP_OK){
         ESP_LOGE(TAG, "i2s preload failed!");
         return ESP_FAIL;
     }
+    if(bytes_written != 0){
+        ESP_LOGE(TAG, "Buffer not completely preloaded!");
+        return ESP_FAIL;
+    }
 
-    printf("Buffer bytes: %i\n", buffer_bytes);
+    printf("Number of DMA Buffer Samples: %i\n", buffer_bytes/sizeof(int32_t));
+    printf("Number of Preload Loops: %i\n", num_preload_loops);
+
     //Let ESP do something else in between writes
     i2s_config_ptr->preloaded = true;
     printf("Preload audio pos: %i\n", audio_chunk_ptr->chunk_data_pos);
