@@ -167,6 +167,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
     while(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
     {
         int buf_pos = 0;
+        int chunk_samples_loaded = 0;
         for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++)
         {
             if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
@@ -180,16 +181,15 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
                 }
                 audio_chunk_ptr->chunk_data_pos++;
                 audio_chunk_ptr->data_idx++;
-                // printf("sample: %.3f, Test_scaled: %.3f, Scaled_sample: %li, volume: %.3f\n", sample, test_scaled_sample, scaled_sample, i2s_config_ptr->vol_scale_factor);
+                chunk_samples_loaded++;
             }
             else
             {
-                i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
-                // printf("Audio at end of chunk\n");
-                // break;
+                // i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
+                printf("Audio at end of chunk\n");
+                break;
             }
         }
-        // printf("Buffer capacity: %i samples\n", i2s_config_ptr->buf_capacity);
         size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
         size_t bytes_written = 0;
         printf("postload samples to write: %i\n", bytes_to_write/sizeof(int32_t));
@@ -199,6 +199,8 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
                                         &bytes_written,
                                         portMAX_DELAY);
         printf("Bytes written: %i\n", bytes_written);
+
+        audio_chunk_ptr->chunk_data_pos = audio_chunk_ptr->chunk_data_pos - chunk_samples_loaded + bytes_written / sizeof(int32_t);
 
         if(ret != ESP_OK){
             ESP_LOGE(TAG, "i2s write failed!");
@@ -238,6 +240,7 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         return ESP_FAIL;
     }
     int buf_pos = 0;
+    int chunk_samples_loaded = 0;
     for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++)
     {
         if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
@@ -251,6 +254,7 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
             }
             audio_chunk_ptr->chunk_data_pos++;
             audio_chunk_ptr->data_idx++;
+            chunk_samples_loaded++;
             // printf("sample: %.3f, Test_scaled: %.3f, Scaled_sample: %li, volume: %.3f\n", sample, test_scaled_sample, scaled_sample, i2s_config_ptr->vol_scale_factor);
         }
         else
@@ -285,6 +289,7 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         ESP_LOGE(TAG, "Buffer not completely preloaded!");
         return ESP_FAIL;
     }
+    audio_chunk_ptr->chunk_data_pos = audio_chunk_ptr->chunk_data_pos - chunk_samples_loaded + bytes_written / sizeof(int32_t);
 
     printf("Number of DMA Buffer Samples: %i\n", buffer_bytes/sizeof(int32_t));
     printf("Number of Preload Loops: %i\n", num_preload_loops);

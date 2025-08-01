@@ -33,7 +33,7 @@
 #define PIN_NUM_CS    GPIO_NUM_10   //CS
 
 //General IO defines
-#define LED1_PIN    48          //GPIO enums only go up to 38, annoyingly
+#define LED1_PIN    48          //GPIO enums only go up to 38
 #define LED2_PIN    GPIO_NUM_38
 #define XSMT_PIN    GPIO_NUM_7
 #define B1_PIN      GPIO_NUM_35
@@ -81,7 +81,6 @@ void flash_lights(void * pvParameters){
     gpio_set_direction(XSMT_PIN, GPIO_MODE_OUTPUT);
     gpio_set_direction(LED1_PIN, GPIO_MODE_OUTPUT);
     gpio_set_direction(LED2_PIN, GPIO_MODE_OUTPUT);
-        // gpio_set_direction(LED2_PIN, GPIO_MODE_OUTPUT);
 
     gpio_set_level(LED1_PIN, 0);
     gpio_set_level(LED2_PIN, 0);
@@ -141,7 +140,7 @@ void app_main(void)
         .chunk_len_wo_dither     = 5760,    //10ms per channel
         .rise_fall_num_samples   = 0,     //1ms rise/fall per channel
         .padding_num_samples     = 100,     //10 samples file padding
-        .dither_num_samples      = 400,    //PCM5102a needs ~30ms of dither to fully power on  Check the Scope, dither is totally messed up TODO fix
+        .dither_num_samples      = 5760,    //PCM5102a needs ~30ms of dither to fully power on  Check the Scope, dither is totally messed up TODO fix
         .capacity                = 0,
         .start_idx               = 0,
         .data_idx                = 0,
@@ -179,7 +178,7 @@ void app_main(void)
     for(int i=0; i<500; i++){
 
         ESP_ERROR_CHECK(stp_sd__get_audio_chunk(&audio_chunk, &wave_file));
-        ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
+        // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
         vTaskDelay(pdMS_TO_TICKS(200));
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
         ESP_ERROR_CHECK(stp_i2s__play_audio_chunk(&i2s_config, &audio_chunk, 20.0));
