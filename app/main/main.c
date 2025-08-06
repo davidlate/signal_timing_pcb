@@ -20,13 +20,18 @@
 #include "math.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "hal/adc_types.h"
+#include "esp_adc/adc_oneshot.h"
 
 #include "stp_sd_sdcardops.h"
 #include "stp_i2s_audio_ops.h"
+#include "stp_adc.h"
 
 
 //SD Card operation defines
-#define AUDIO_FILENAME "/SINEA.wav"
+//#define AUDIO_FILENAME "/SINEA.wav"
+#define AUDIO_FILENAME "/WHITE.wav"
+
 #define PIN_NUM_MISO  GPIO_NUM_13   //DO
 #define PIN_NUM_MOSI  GPIO_NUM_11   //DI
 #define PIN_NUM_CLK   GPIO_NUM_12   //CLK
@@ -43,18 +48,21 @@
 //ADC Pin and channel defines from schematic and https://www.luisllamas.es/en/esp32-s3-hardware-details-pinout/
 //See example https://github.com/espressif/esp-idf/blob/v4.4/examples/peripherals/adc/single_read/single_read/main/single_read.c
 #define VOL_PIN         GPIO_NUM_14     //Volume sample DAC pin
-#define VOL_CHAN        ADC2_CHANNEL_3
-#define BATT_PIN        GPIO_NUM_16     //9VDIV battery sample DAC pin
-#define BATT_CHAN       ADC2_CHANNEL_5
-#define HVDIV_PIN       GPIO_NUM_18     //28VDIV pin
-#define HVDIV_CHAN      ADC2_CHANNEL_7
+#define VOL_ADC_UNIT    ADC_UNIT_2
+#define VOL_ADC_CHAN    ADC_CHANNEL_3
 #define CH1_KNOB_PIN    GPIO_NUM_1      //Status of ch1 knob DAC pin
-#define CH1_KNOB_CHAN   ADC1_CHANNEL_0
+#define CH1_ADC_UNIT    ADC_UNIT_1
+#define CH1_ADC_CHAN    ADC_CHANNEL_0
 #define CH2_KNOB_PIN    GPIO_NUM_15     //Status of ch2 knob DAC pin
-#define CH2_KNOB_CHAN   ADC2_CHANNEL_4     //Status of ch2 knob DAC pin
+#define CH2_ADC_UNIT    ADC_UNIT_2
+#define CH2_ADC_CHAN    ADC_CHANNEL_4
+#define BATT_PIN        GPIO_NUM_16     //9VDIV battery sample DAC pin
+#define BATT_ADC_UNIT   ADC_UNIT_2
+#define BATT_ADC_CHAN   ADC_CHANNEL_5
+#define HVDIV_PIN       GPIO_NUM_18     //28VDIV pin
+#define HVDIV_ADC_UNIT  ADC_UNIT_2
+#define HVDIV_ADC_CHAN  ADC_CHANNEL_7
 
-#define ADC_ATTEN       ADC_ATTEN_DB_11
-#define ADC_CAL_SCHEME  ESP_ADC_CAL_VAL_EFUSE_TP_FIT
 
 //PWM Pin defines
 #define CH1_CURSET_PIN  GPIO_NUM_2
@@ -64,7 +72,7 @@
 #define CH1_SW_OUTA_PIN     GPIO_NUM_9  //CH1_SW_OUT+
 #define CH1_SW_OUTB_PIN     GPIO_NUM_8  //CH1_SW_OUT-
 #define CH2_SW_OUTA_PIN     GPIO_NUM_36 //CH2_SW_OUT+
-#define CH2_SW_OUTB_PIN     GPIO_NUM_37
+#define CH2_SW_OUTB_PIN     GPIO_NUM_37 //CH2_SW_OUT-
 
 //I2S defines
 #define I2S_WS_PIN   GPIO_NUM_4      //LCK, LRC, 13 I2S word select io number
@@ -95,6 +103,8 @@ void flash_lights(void * pvParameters){
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
+
+
 
 
 void app_main(void)
@@ -128,6 +138,25 @@ void app_main(void)
         return;
     }
 
+
+    stp_adc__adc_setup_struct adc_chan_setup = {
+        .vol_adc_unit  = VOL_ADC_UNIT,
+        .vol_adc_chan  = VOL_ADC_CHAN,
+        .ch1_adc_unit  = CH1_ADC_UNIT,
+        .ch1_adc_chan  = CH1_ADC_CHAN,
+        .ch2_adc_unit  = CH2_ADC_UNIT,
+        .ch2_adc_chan  = CH2_ADC_CHAN,
+        .batt_adc_unit = BATT_ADC_UNIT,
+        .batt_adc_chan = BATT_ADC_CHAN,
+        .hv_adc_unit   = HVDIV_ADC_UNIT,
+        .hv_adc_chan   = HVDIV_ADC_CHAN,
+    };
+
+    stp_adc__adc_chan_struct adc_chan_struct;
+    stp_adc__setup_adc_chans(adc_chan_setup, &adc_chan_struct);
+    stp_adc__adc_chan_results adc_results = {0};
+
+
     stp_sd__wavFile wave_file = {
       .filename = AUDIO_FILENAME,
     };  
@@ -137,10 +166,11 @@ void app_main(void)
     }
 
     stp_sd__audio_chunk audio_chunk = {     //All zeroed or NULL parameters are set by the sd_stp__get_audio_chunk function
-        .chunk_len_wo_dither     = 5760,    //10ms per channel
-        .rise_fall_num_samples   = 0,     //1ms rise/fall per channel
+        .chunk_len_wo_dither     = 24000,    //10ms per channel
+        .rise_fall_num_samples   = 192,     //1ms rise/fall per channel
         .padding_num_samples     = 100,     //10 samples file padding
-        .dither_num_samples      = 5760,    //PCM5102a needs ~30ms of dither to fully power on  Check the Scope, dither is totally messed up TODO fix
+        .pre_dither_num_samples  = 1920,    //PCM5102a needs ~30ms of dither to fully power on  Check the Scope, dither is totally messed up TODO fix
+        .post_dither_num_samples = 0,
         .capacity                = 0,
         .start_idx               = 0,
         .data_idx                = 0,
@@ -173,18 +203,20 @@ void app_main(void)
         ESP_LOGE(TAG, "Error setting up i2s audio channel!");
         // return;
     };
-    gpio_set_level(XSMT_PIN, 1);
 
     for(int i=0; i<500; i++){
 
         ESP_ERROR_CHECK(stp_sd__get_audio_chunk(&audio_chunk, &wave_file));
         // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
-        vTaskDelay(pdMS_TO_TICKS(200));
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
+        vTaskDelay(pdMS_TO_TICKS(200));
+        gpio_set_level(XSMT_PIN, 1);
         ESP_ERROR_CHECK(stp_i2s__play_audio_chunk(&i2s_config, &audio_chunk, 20.0));
         vTaskDelay(pdMS_TO_TICKS(100));
+        // gpio_set_level(XSMT_PIN, 0);
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_disable(&i2s_config));
-        vTaskDelay(pdMS_TO_TICKS(100));
+        stp_adc__read_all_adc_chans(&adc_chan_struct, &adc_results);
+        vTaskDelay(pdMS_TO_TICKS(200));
 
     }
 

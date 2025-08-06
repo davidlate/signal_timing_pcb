@@ -1,38 +1,13 @@
-#include <string.h>
-#include <stdint.h>
-#include <stdio.h>
-#include "esp_mac.h"
-#include "soc/esp32/rtc.h"
-#include "driver/i2s_std.h"
-#include "esp_check.h"
-#include "sdkconfig.h"
-#include "esp_system.h" 
-#include <rom/ets_sys.h>
-#include <math.h>
-
-#include "stp_sd_sdcardops.h"
 #include "stp_i2s_audio_ops.h"
-
-// const int    I2S_WS_PIN         = GPIO_NUM_4;      //LCK, LRC, 13 I2S word select io number
-// const int    I2S_DOUT_PIN       = GPIO_NUM_5;      //DIN, 12 I2S data out io number
-// const int    I2S_BCK_PIN        = GPIO_NUM_6;      //BCK 11  I2S bit clock io number
-// const float  VOL_PERCENT        = 100.00;
-// const double SAMPLE_RATE        = 96000.00;
-// const double DURATION_MS        = 10.00;
-// const double AUDIO_RISE_TIME_MS = 1.0;
-
-
-// const double NUM_DMA_BUFF  = 5;
-// const double SIZE_DMA_BUFF = 500;
-
-
+#include "math.h"
+#include "esp_err.h"
 
 esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
 {
     char* TAG = "i2s chan setup";
 
     if (i2s_config_ptr->max_vol_dBFS > 0){
-        ESP_LOGE(TAG, "Max volume dBFS must be a negative value!");
+        printf("Max volume dBFS must be a negative value!");
         return ESP_FAIL;
     }
     if (i2s_config_ptr->min_vol_dB_rel_to_max > 0){
@@ -159,7 +134,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
             return ESP_FAIL;
         }
     }
-    printf("Postload audio pos: %i\n", audio_chunk_ptr->chunk_data_pos);
+    // printf("Postload audio pos: %i\n", audio_chunk_ptr->chunk_data_pos);
 
     while(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
     {
@@ -174,7 +149,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
                 int32_t scaled_sample = (int32_t)(sample * .1);//i2s_config_ptr->vol_scale_factor);
                 i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
                 if(buf_pos == 10){
-                    printf("Postload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
+                    // printf("Postload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
                 }
                 audio_chunk_ptr->chunk_data_pos++;
                 audio_chunk_ptr->data_idx++;
@@ -189,13 +164,13 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
         }
         size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
         size_t bytes_written = 0;
-        printf("postload samples to write: %i\n", bytes_to_write/sizeof(int32_t));
+        // printf("postload samples to write: %i\n", bytes_to_write/sizeof(int32_t));
         esp_err_t ret = i2s_channel_write(i2s_config_ptr->tx_chan,
                                         i2s_config_ptr->buf_ptr,
                                         bytes_to_write,
                                         &bytes_written,
                                         portMAX_DELAY);
-        printf("Bytes written: %i\n", bytes_written);
+        // printf("Bytes written: %i\n", bytes_written);
 
         audio_chunk_ptr->chunk_data_pos = audio_chunk_ptr->chunk_data_pos - chunk_samples_loaded + bytes_written / sizeof(int32_t);
 
@@ -207,7 +182,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
             ESP_LOGE(TAG, "Not enough bytes written to i2s bus!");
             return ESP_FAIL;
         }
-        printf("Bytes to write: %i\n", bytes_to_write);
+        // printf("Bytes to write: %i\n", bytes_to_write);
         // Let ESP do something else in between writes
         vTaskDelay(pdMS_TO_TICKS(i2s_config_ptr->ms_delay_between_writes));
     }

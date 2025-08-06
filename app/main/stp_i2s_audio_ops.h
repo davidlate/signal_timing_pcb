@@ -2,7 +2,6 @@
 #define STP_I2S_AUDIO_OPS_H
 
 #include "stp_sd_sdcardops.h"
-#include "driver/i2s_std.h"
 
 
 typedef struct

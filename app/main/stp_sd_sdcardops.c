@@ -286,11 +286,11 @@ esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
     char* TAG = "audio_chunk_const";
 
     int A_idx = 0;
-    int B_idx = A_idx + audio_chunk->dither_num_samples;
+    int B_idx = A_idx + audio_chunk->pre_dither_num_samples;
     int C_idx = B_idx + audio_chunk->rise_fall_num_samples;
     int D_idx = B_idx + audio_chunk->chunk_len_wo_dither - audio_chunk->rise_fall_num_samples;
     int E_idx = B_idx + audio_chunk->chunk_len_wo_dither;
-    int F_idx = E_idx + audio_chunk->dither_num_samples;
+    int F_idx = E_idx + audio_chunk->post_dither_num_samples;
 
     printf("A_idx: %i | B_idx: %i | C_idx: %i | D_idx: %i | E_idx: %i | F_idx: %i\n", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
 

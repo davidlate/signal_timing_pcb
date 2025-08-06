@@ -4,6 +4,21 @@
 #include <esp_err.h>
 #include "sdmmc_cmd.h"
 #include "sd_test_io.h"
+#include "driver/i2s_std.h"
+#include <string.h>
+#include <sys/unistd.h>
+#include <sys/stat.h>
+#include "sdmmc_cmd.h"
+#include "sd_test_io.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <dirent.h> 
+#include <inttypes.h>
+#include "esp_random.h"
+#include "bootloader_random.h"
+#include "math.h"
+#include "esp_vfs_fat.h"
+
 
 typedef struct {
     bool open;
@@ -42,7 +57,8 @@ typedef struct {
     int      chunk_len_wo_dither;         //REQUIRED INPUT: length of chunk in number of samples, not including dither
     int      rise_fall_num_samples;       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
     int      padding_num_samples;         //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
-    int      dither_num_samples;          //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+    int      pre_dither_num_samples;      //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+    int      post_dither_num_samples;
     int      capacity;                    //memory capacity of chunk_data_ptr
     int      chunk_size;                  //size of chunk in bytes
     int      start_idx;                   //starting index of chunk relative to audio data
