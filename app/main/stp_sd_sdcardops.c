@@ -292,7 +292,7 @@ esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
     int E_idx = B_idx + audio_chunk->chunk_len_wo_dither;
     int F_idx = E_idx + audio_chunk->post_dither_num_samples;
 
-    printf("A_idx: %i | B_idx: %i | C_idx: %i | D_idx: %i | E_idx: %i | F_idx: %i\n", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
+    // printf("A_idx: %i | B_idx: %i | C_idx: %i | D_idx: %i | E_idx: %i | F_idx: %i", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
 
     audio_chunk->chunk_len_inc_dither = F_idx - A_idx;
     audio_chunk->chunk_size = (audio_chunk->chunk_len_inc_dither) * sizeof(*(audio_chunk->chunk_data_ptr));
@@ -383,7 +383,7 @@ esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk* audio_chunk, stp_sd__wavF
         // printf("Fall sample: %i | ramp val: %0.10f |Audio File Idx: %i | New Audio Value: %li\n", i - D_idx, cos_ramp, audio_chunk->start_idx+i - B_idx, audio_chunk->chunk_data_ptr[i]);
     };
 
-    ESP_LOGI(TAG, "Successfully loaded new audio chunk");
+    // ESP_LOGI(TAG, "Successfully loaded new audio chunk");
 
     // printf("Start idx: %i | Start Data: %li\nEnd idx: %i | End Data: %li\nidx 500 samples in: %i | Data: %li\nChunk Length: %i\nSample Count: %i\n",
     //         audio_chunk->start_idx,

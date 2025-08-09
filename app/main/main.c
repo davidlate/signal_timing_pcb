@@ -22,6 +22,7 @@
 #include "driver/gpio.h"
 #include "hal/adc_types.h"
 #include "esp_adc/adc_oneshot.h"
+#include "freertos/queue.h"
 
 #include "stp_sd_sdcardops.h"
 #include "stp_i2s_audio_ops.h"
@@ -63,6 +64,7 @@
 #define HVDIV_ADC_UNIT  ADC_UNIT_2
 #define HVDIV_ADC_CHAN  ADC_CHANNEL_7
 
+#define ADC_UPDATE_PERIOD_MS    100
 
 //PWM Pin defines
 #define CH1_CURSET_PIN  GPIO_NUM_2
@@ -83,6 +85,9 @@ const int SAMPLE_RATE    = 96000;
 const int NUM_DMA_BUFF   = 5;
 const int SIZE_DMA_BUFF  = 250;         //can go up to 500
 
+typedef struct {
+        QueueHandle_t adc_queue;
+    } queue_struct;
 
 void flash_lights(void * pvParameters){
 
@@ -105,11 +110,57 @@ void flash_lights(void * pvParameters){
 }
 
 
+void update_adc(void* pvParameters){
+
+    QueueHandle_t* adc_queue_ptr = (QueueHandle_t*)pvParameters;
+    
+    stp_adc__adc_setup_struct adc_chan_setup = {
+        .vol_adc_unit  = VOL_ADC_UNIT,
+        .vol_adc_chan  = VOL_ADC_CHAN,
+        .ch1_adc_unit  = CH1_ADC_UNIT,
+        .ch1_adc_chan  = CH1_ADC_CHAN,
+        .ch2_adc_unit  = CH2_ADC_UNIT,
+        .ch2_adc_chan  = CH2_ADC_CHAN,
+        .batt_adc_unit = BATT_ADC_UNIT,
+        .batt_adc_chan = BATT_ADC_CHAN,
+        .hv_adc_unit   = HVDIV_ADC_UNIT,
+        .hv_adc_chan   = HVDIV_ADC_CHAN,
+    };
+
+    stp_adc__adc_chan_struct adc_chan_struct;
+    stp_adc__setup_adc_chans(adc_chan_setup, &adc_chan_struct);
+    stp_adc__adc_chan_results adc_results = {0};
+
+    while (true){
+        stp_adc__read_all_adc_chans(&adc_chan_struct, &adc_results);
+        xQueueSend(*adc_queue_ptr, &adc_results, portMAX_DELAY);              //We are using the queue to enforce a mutex, we only need the most recent data for the ADC
+        vTaskDelay(pdMS_TO_TICKS(ADC_UPDATE_PERIOD_MS));            //I just don't know how to use mutexes yet.
+    }
+}
+
+void print_to_terminal(void* pvParameters){
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    queue_struct* all_app_queues_ptr = (queue_struct*)pvParameters;
+    stp_adc__adc_chan_results adc_results;
+
+    while (true){
+    xQueueReceive(all_app_queues_ptr->adc_queue, &adc_results, portMAX_DELAY);
+    
+    printf("\rVol: %.0f%% | Ch2: %0.0f%% | Ch1: %0.0f%% |Batt: %.1fV | HV: %.1fV  ",
+        adc_results.vol_percent,
+        adc_results.ch1_percent,
+        adc_results.ch2_percent,
+        adc_results.batt_voltage,
+        adc_results.hv_voltage);
+    }
+}
 
 
 void app_main(void)
 {
     char* TAG = "main";
+    
+    printf("\33[?25l"); //Hide terminal cursor, quoted from https://stackoverflow.com/questions/30126490/how-to-hide-console-cursor-in-c;
 
     stp_sd__spi_config spi_config ={
         .open        = false,
@@ -130,33 +181,43 @@ void app_main(void)
         }
     }
 
-    BaseType_t task_created;
+    BaseType_t flash_light_task_created;
     TaskHandle_t flash_light_task = NULL;
-    task_created = xTaskCreate(flash_lights, "Flash Lights", 1024, (void*) 0, 0, &flash_light_task);
-    if(task_created != pdPASS){
+    int flash_light_task_priority = 0;
+    flash_light_task_created = xTaskCreate(flash_lights, "Flash Lights", 1024, (void*) 0, flash_light_task_priority, &flash_light_task);
+    if(flash_light_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating flashing light task!");
         return;
     }
 
+    QueueHandle_t adc_queue;
+    int adc_queue_len = 1;
+    adc_queue = xQueueCreate(adc_queue_len, sizeof(stp_adc__adc_chan_results));
+    if (adc_queue==NULL) ESP_LOGE(TAG, "Failed to create ADC queue!");
 
-    stp_adc__adc_setup_struct adc_chan_setup = {
-        .vol_adc_unit  = VOL_ADC_UNIT,
-        .vol_adc_chan  = VOL_ADC_CHAN,
-        .ch1_adc_unit  = CH1_ADC_UNIT,
-        .ch1_adc_chan  = CH1_ADC_CHAN,
-        .ch2_adc_unit  = CH2_ADC_UNIT,
-        .ch2_adc_chan  = CH2_ADC_CHAN,
-        .batt_adc_unit = BATT_ADC_UNIT,
-        .batt_adc_chan = BATT_ADC_CHAN,
-        .hv_adc_unit   = HVDIV_ADC_UNIT,
-        .hv_adc_chan   = HVDIV_ADC_CHAN,
+    BaseType_t adc_task_created;
+    TaskHandle_t update_adc_task = NULL;
+    int adc_task_priority = 1;
+    adc_task_created = xTaskCreate(update_adc, "Update ADC Queue", 4096, &adc_queue, adc_task_priority, &update_adc_task);
+    if(adc_task_created != pdPASS){
+        ESP_LOGE(TAG, "Error creating adc update task!");
+        return;
+    }
+
+    queue_struct all_app_queues = {
+        .adc_queue = adc_queue,
     };
 
-    stp_adc__adc_chan_struct adc_chan_struct;
-    stp_adc__setup_adc_chans(adc_chan_setup, &adc_chan_struct);
-    stp_adc__adc_chan_results adc_results = {0};
+    BaseType_t print_task_created;
+    TaskHandle_t update_print_task = NULL;
+    int print_task_priority = 1;
+    print_task_created = xTaskCreate(print_to_terminal, "Update ADC Queue", 4096, &all_app_queues, print_task_priority, &update_print_task);
+    if(print_task_created != pdPASS){
+        ESP_LOGE(TAG, "Error creating print to terminal update task!");
+        return;
+    }
 
-
+    
     stp_sd__wavFile wave_file = {
       .filename = AUDIO_FILENAME,
     };  
@@ -205,7 +266,7 @@ void app_main(void)
     };
 
     for(int i=0; i<500; i++){
-
+ 
         ESP_ERROR_CHECK(stp_sd__get_audio_chunk(&audio_chunk, &wave_file));
         // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
@@ -215,7 +276,6 @@ void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(100));
         // gpio_set_level(XSMT_PIN, 0);
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_disable(&i2s_config));
-        stp_adc__read_all_adc_chans(&adc_chan_struct, &adc_results);
         vTaskDelay(pdMS_TO_TICKS(200));
 
     }

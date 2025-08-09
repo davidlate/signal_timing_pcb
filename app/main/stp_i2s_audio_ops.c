@@ -158,7 +158,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
             else
             {
                 // i2s_config_ptr->buf_ptr[buf_pos] = dither_const;
-                printf("Audio at end of chunk\n");
+                // printf("Audio at end of chunk\n");
                 break;
             }
         }
