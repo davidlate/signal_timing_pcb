@@ -59,14 +59,36 @@ typedef struct {
     int      padding_num_samples;         //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
     int      pre_dither_num_samples;      //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
     int      post_dither_num_samples;
+    int      max_chunk_buf_size_bytes;    //REQUIRED INPUT: Number of bytes we can allocate to holding audio data
+
+} stp_sd__audio_chunk_setup;
+
+typedef struct {
+    int      chunk_len_wo_dither;         //REQUIRED INPUT: length of chunk in number of samples, not including dither
+    int      rise_fall_num_samples;       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+    int      padding_num_samples;         //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
+    int      pre_dither_num_samples;      //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+    int      post_dither_num_samples;
+    int      max_chunk_buf_size_bytes;    
     int      capacity;                    //memory capacity of chunk_data_ptr
     int      chunk_size;                  //size of chunk in bytes
     int      start_idx;                   //starting index of chunk relative to audio data
     int      data_idx;                    //current data location idx, not including dither
     int      end_idx;                     //ending index of chunk relative to audio data
     int32_t* chunk_data_ptr;              //array of int32_t audio samples
-    int      chunk_data_pos;              //index in audio chunk we currently are, not including dither
+    int      chunk_data_pos;              //index in audio chunk we currently are, including dither
+    int      memory_buffer_pos;           //index in buffer used to store audio data that we are currently at.
     int      chunk_len_inc_dither;
+    int      A_idx;
+    int      B_idx;
+    int      C_idx;
+    int      D_idx;
+    int      E_idx;
+    int      F_idx;
+    int      start_file_pos_samples;
+    int      end_file_pos_samples;
+    int      delta_file_pos_samples;
+    long     chunk_start_pos_filebytes;  //In the wav file on the sd card, this is the number of bytes from the beginning of the file to the point of the beginning of the audio chunk
 
 } stp_sd__audio_chunk;
 
@@ -77,23 +99,14 @@ esp_err_t stp_sd__open_audio_file(stp_sd__wavFile*);
 /**
  * @brief //This function selects a "chunk" of specified length from the wave file, beginning at a random start point, with padding after the beginning and before the ending
 */
- esp_err_t stp_sd__get_audio_chunk(stp_sd__audio_chunk*, stp_sd__wavFile*);
+esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup*, stp_sd__audio_chunk*, stp_sd__wavFile* );
 
+esp_err_t stp_sd__get_new_audio_chunk(stp_sd__audio_chunk*, stp_sd__wavFile*);
+esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk*, int*, int32_t*);
+esp_err_t stp_sd__reload_chunk_memory_buffer(stp_sd__audio_chunk*, stp_sd__wavFile*);
 
-esp_err_t stp_sd__destruct_audio_chunk(stp_sd__audio_chunk*);
+esp_err_t stp_sd__free_audio_chunk(stp_sd__audio_chunk*);
+
 esp_err_t stp_sd__close_audio_file(stp_sd__wavFile*);
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #endif

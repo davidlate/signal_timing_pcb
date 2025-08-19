@@ -44,18 +44,4 @@ esp_err_t stp_adc__read_all_adc_chans(stp_adc__adc_chan_struct*, stp_adc__adc_ch
 esp_err_t stp_adc__read_vol_adc_chan(stp_adc__adc_chan_struct, double*);
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #endif

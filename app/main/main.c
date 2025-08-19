@@ -226,20 +226,18 @@ void app_main(void)
         return;
     }
 
-    stp_sd__audio_chunk audio_chunk = {     //All zeroed or NULL parameters are set by the sd_stp__get_audio_chunk function
-        .chunk_len_wo_dither     = 24000,    //10ms per channel
-        .rise_fall_num_samples   = 192,     //1ms rise/fall per channel
-        .padding_num_samples     = 100,     //10 samples file padding
-        .pre_dither_num_samples  = 1920,    //PCM5102a needs ~30ms of dither to fully power on  Check the Scope, dither is totally messed up TODO fix
-        .post_dither_num_samples = 0,
-        .capacity                = 0,
-        .start_idx               = 0,
-        .data_idx                = 0,
-        .end_idx                 = 0,     
-        .chunk_data_ptr          = NULL,     
-        .chunk_data_pos          = 0,
-        .chunk_len_inc_dither    = 0,
-    };
+
+    stp_sd__audio_chunk_setup audio_chunk_setup = {
+        .chunk_len_wo_dither        = 24000,        //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .rise_fall_num_samples      = 192,    //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+        .padding_num_samples        = 100,      //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
+        .pre_dither_num_samples     = 1920,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+        .post_dither_num_samples    = 0,
+        .max_chunk_buf_size_bytes   = 5000*sizeof(int32_t),
+    } ;
+    stp_sd__audio_chunk audio_chunk;
+    ESP_ERROR_CHECK(stp_sd__init_audio_chunk(&audio_chunk_setup, &audio_chunk, &wave_file));
+
 
     stp_i2s__i2s_config i2s_config = {
                         .buf_capacity             = 0,
@@ -259,15 +257,12 @@ void app_main(void)
                         .actual_dbFS              = 0,
                         .preloaded                = false
                         };
+    ESP_ERROR_CHECK(stp_i2s__i2s_channel_setup(&i2s_config));
 
-    if(stp_i2s__i2s_channel_setup(&i2s_config) != ESP_OK){
-        ESP_LOGE(TAG, "Error setting up i2s audio channel!");
-        // return;
-    };
 
     for(int i=0; i<500; i++){
  
-        ESP_ERROR_CHECK(stp_sd__get_audio_chunk(&audio_chunk, &wave_file));
+        ESP_ERROR_CHECK(stp_sd__get_new_audio_chunk(&audio_chunk, &wave_file));
         // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -281,7 +276,7 @@ void app_main(void)
     }
 
 
-    if(stp_sd__destruct_audio_chunk(&audio_chunk) != ESP_OK){
+    if(stp_sd__free_audio_chunk(&audio_chunk) != ESP_OK){
         ESP_LOGE(TAG, "Error destructing audio chunk!");
         return;
     }
