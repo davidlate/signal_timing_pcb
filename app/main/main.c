@@ -65,6 +65,7 @@
 #define HVDIV_ADC_CHAN  ADC_CHANNEL_7
 
 #define ADC_UPDATE_PERIOD_MS    100
+#define PRINT_UPDATE_PERIOD_MS  100
 
 //PWM Pin defines
 #define CH1_CURSET_PIN  GPIO_NUM_2
@@ -82,12 +83,14 @@
 #define I2S_BCK_PIN  GPIO_NUM_6      //BCK 11  I2S bit clock io number
 
 const int SAMPLE_RATE    = 96000;
-const int NUM_DMA_BUFF   = 5;
-const int SIZE_DMA_BUFF  = 250;         //can go up to 500
+const int NUM_DMA_BUFF   = 8;
+const int SIZE_DMA_BUFF  = 500;         //can go up to 500
+
 
 typedef struct {
-        QueueHandle_t adc_queue;
-    } queue_struct;
+    SemaphoreHandle_t         adc_mutex;
+    stp_adc__adc_chan_results adc_results;
+} Adc_Update_Struct;
 
 void flash_lights(void * pvParameters){
 
@@ -109,10 +112,9 @@ void flash_lights(void * pvParameters){
     }
 }
 
-
 void update_adc(void* pvParameters){
 
-    QueueHandle_t* adc_queue_ptr = (QueueHandle_t*)pvParameters;
+    Adc_Update_Struct* adc_update_struct = (Adc_Update_Struct*)pvParameters;
     
     stp_adc__adc_setup_struct adc_chan_setup = {
         .vol_adc_unit  = VOL_ADC_UNIT,
@@ -129,29 +131,39 @@ void update_adc(void* pvParameters){
 
     stp_adc__adc_chan_struct adc_chan_struct;
     stp_adc__setup_adc_chans(adc_chan_setup, &adc_chan_struct);
-    stp_adc__adc_chan_results adc_results = {0};
 
-    while (true){
-        stp_adc__read_all_adc_chans(&adc_chan_struct, &adc_results);
-        xQueueSend(*adc_queue_ptr, &adc_results, portMAX_DELAY);              //We are using the queue to enforce a mutex, we only need the most recent data for the ADC
-        vTaskDelay(pdMS_TO_TICKS(ADC_UPDATE_PERIOD_MS));            //I just don't know how to use mutexes yet.
+    while (true)
+    {
+        if(xSemaphoreTake(adc_update_struct->adc_mutex, portMAX_DELAY)==pdTRUE)
+        {
+            stp_adc__read_all_adc_chans(&adc_chan_struct, &(adc_update_struct->adc_results));
+
+            xSemaphoreGive(adc_update_struct->adc_mutex);
+            vTaskDelay(pdMS_TO_TICKS(ADC_UPDATE_PERIOD_MS));
+        }
     }
 }
 
 void print_to_terminal(void* pvParameters){
-    vTaskDelay(pdMS_TO_TICKS(10000));
-    queue_struct* all_app_queues_ptr = (queue_struct*)pvParameters;
-    stp_adc__adc_chan_results adc_results;
+    vTaskDelay(pdMS_TO_TICKS(100));
+    Adc_Update_Struct* adc_update_struct = (Adc_Update_Struct*)pvParameters;
 
-    while (true){
-    xQueueReceive(all_app_queues_ptr->adc_queue, &adc_results, portMAX_DELAY);
-    
-    printf("\rVol: %.0f%% | Ch2: %0.0f%% | Ch1: %0.0f%% |Batt: %.1fV | HV: %.1fV  ",
-        adc_results.vol_percent,
-        adc_results.ch1_percent,
-        adc_results.ch2_percent,
-        adc_results.batt_voltage,
-        adc_results.hv_voltage);
+    while (true)
+    {
+        if (xSemaphoreTake(adc_update_struct->adc_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            stp_adc__adc_chan_results adc_results = adc_update_struct->adc_results;
+
+            printf("\rVol: %.0f%% | Ch2: %0.0f%% | Ch1: %0.0f%% |Batt: %.1fV | HV: %.1fV  ",
+                adc_results.vol_percent,
+                adc_results.ch1_percent,
+                adc_results.ch2_percent,
+                adc_results.batt_voltage,
+                adc_results.hv_voltage);
+
+            xSemaphoreGive(adc_update_struct->adc_mutex);
+        }
+            vTaskDelay(pdMS_TO_TICKS(PRINT_UPDATE_PERIOD_MS));
     }
 }
 
@@ -159,6 +171,7 @@ void print_to_terminal(void* pvParameters){
 void app_main(void)
 {
     char* TAG = "main";
+
     
     printf("\33[?25l"); //Hide terminal cursor, quoted from https://stackoverflow.com/questions/30126490/how-to-hide-console-cursor-in-c;
 
@@ -190,28 +203,26 @@ void app_main(void)
         return;
     }
 
-    QueueHandle_t adc_queue;
-    int adc_queue_len = 1;
-    adc_queue = xQueueCreate(adc_queue_len, sizeof(stp_adc__adc_chan_results));
-    if (adc_queue==NULL) ESP_LOGE(TAG, "Failed to create ADC queue!");
+    SemaphoreHandle_t adc_mutex = NULL;
+    adc_mutex = xSemaphoreCreateMutex();
+    if( adc_mutex == NULL ) ESP_LOGE(TAG, "Error creating adc semaphore!");
+
+    Adc_Update_Struct adc_update_struct = {0};
+    adc_update_struct.adc_mutex = adc_mutex;
 
     BaseType_t adc_task_created;
     TaskHandle_t update_adc_task = NULL;
     int adc_task_priority = 1;
-    adc_task_created = xTaskCreate(update_adc, "Update ADC Queue", 4096, &adc_queue, adc_task_priority, &update_adc_task);
+    adc_task_created = xTaskCreate(update_adc, "Update ADC Values", 4096, &adc_update_struct, adc_task_priority, &update_adc_task);
     if(adc_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating adc update task!");
         return;
     }
 
-    queue_struct all_app_queues = {
-        .adc_queue = adc_queue,
-    };
-
     BaseType_t print_task_created;
     TaskHandle_t update_print_task = NULL;
     int print_task_priority = 1;
-    print_task_created = xTaskCreate(print_to_terminal, "Update ADC Queue", 4096, &all_app_queues, print_task_priority, &update_print_task);
+    print_task_created = xTaskCreate(print_to_terminal, "Print to Terminal", 4096, &adc_update_struct, print_task_priority, &update_print_task);
     if(print_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating print to terminal update task!");
         return;
@@ -226,31 +237,30 @@ void app_main(void)
         return;
     }
 
-
     stp_sd__audio_chunk_setup audio_chunk_setup = {
-        .chunk_len_wo_dither        = 24000,        //REQUIRED INPUT: length of chunk in number of samples, not including dither
-        .rise_fall_num_samples      = 192,    //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+        .chunk_len_wo_dither        = 7680,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .rise_fall_num_samples      = 2400,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
         .padding_num_samples        = 100,      //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
-        .pre_dither_num_samples     = 1920,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+        .pre_dither_num_samples     = 0,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
         .post_dither_num_samples    = 0,
-        .max_chunk_buf_size_bytes   = 5000*sizeof(int32_t),
+        .max_chunk_buf_size_bytes   = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*4+1, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
+        .wavFile_ptr                = &wave_file,
     } ;
-    stp_sd__audio_chunk audio_chunk;
-    ESP_ERROR_CHECK(stp_sd__init_audio_chunk(&audio_chunk_setup, &audio_chunk, &wave_file));
-
+    stp_sd__audio_chunk audio_chunk = {0};
+    stp_sd__init_audio_chunk(&audio_chunk_setup, &audio_chunk);
 
     stp_i2s__i2s_config i2s_config = {
                         .buf_capacity             = 0,
                         .buf_len                  = 0,
                         .num_dma_buf              = NUM_DMA_BUFF,
                         .size_dma_buf             = SIZE_DMA_BUFF,
-                        .ms_delay_between_writes  = 2,
+                        .ms_delay_between_writes  = 0,
                         .bclk_pin                 = I2S_BCK_PIN,    
                         .ws_pin                   = I2S_WS_PIN,
                         .dout_pin                 = I2S_DOUT_PIN,
                         .sample_rate_Hz           = SAMPLE_RATE,
                         .max_vol_dBFS             = -20,
-                        .min_vol_dB_rel_to_max    = -60,
+                        .min_vol_dBFS             = -60,
                         .set_vol_percent          = 10,
                         .vol_scale_factor         = 0,
                         .min_vol_percent          = 2,
@@ -261,17 +271,20 @@ void app_main(void)
 
 
     for(int i=0; i<500; i++){
- 
-        ESP_ERROR_CHECK(stp_sd__get_new_audio_chunk(&audio_chunk, &wave_file));
+
+        ESP_ERROR_CHECK(stp_sd__get_new_audio_chunk(&audio_chunk, &wave_file, false));
+
+        if(xSemaphoreTake(adc_update_struct.adc_mutex, portMAX_DELAY) != pdTRUE) ESP_LOGE(TAG, "Error taking adc mutex for volume!");
+        double vol_set_perc = (adc_update_struct.adc_results).vol_percent;
         // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
-        vTaskDelay(pdMS_TO_TICKS(200));
         gpio_set_level(XSMT_PIN, 1);
-        ESP_ERROR_CHECK(stp_i2s__play_audio_chunk(&i2s_config, &audio_chunk, 20.0));
-        vTaskDelay(pdMS_TO_TICKS(100));
+        ESP_ERROR_CHECK(stp_i2s__play_audio_chunk(&i2s_config, &audio_chunk, vol_set_perc));
+        
+        xSemaphoreGive(adc_update_struct.adc_mutex);
         // gpio_set_level(XSMT_PIN, 0);
         ESP_ERROR_CHECK(stp_i2s__i2s_channel_disable(&i2s_config));
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(500));
 
     }
 

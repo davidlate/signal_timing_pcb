@@ -10,15 +10,16 @@ esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr)
         printf("Max volume dBFS must be a negative value!");
         return ESP_FAIL;
     }
-    if (i2s_config_ptr->min_vol_dB_rel_to_max > 0){
+    if (i2s_config_ptr->min_vol_dBFS > 0){
         ESP_LOGE(TAG, "Min volume dB relative to max must be a negative value!");
         return ESP_FAIL;
     }
-
+    //TODO check out 4
     int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * sizeof(int32_t) * 4;
+
     i2s_config_ptr->buf_len = write_buffer_size_bytes / sizeof(int32_t);
 
-    i2s_config_ptr->buf_ptr = malloc(write_buffer_size_bytes*2);
+    i2s_config_ptr->buf_ptr = malloc(write_buffer_size_bytes *2);
     if (i2s_config_ptr->buf_ptr == NULL){
         ESP_LOGE(TAG, "Error allocating memory for i2s write buffer");
         return ESP_FAIL;
@@ -91,13 +92,17 @@ esp_err_t stp_i2s__set_vol_scale_factor(stp_i2s__i2s_config* i2s_config_ptr, dou
         return ESP_FAIL;
     }
     i2s_config_ptr->set_vol_percent = set_vol_perc;
-    double scale_factor_1 = pow(10, i2s_config_ptr->max_vol_dBFS/20);                                     //Setting the upper end of the dynamic range of the volume control
-    double db_rel = (1 - (i2s_config_ptr->set_vol_percent/100)) * i2s_config_ptr->min_vol_dB_rel_to_max;  //min_vol_dB_rel_to_max is negative, so we invert it by using 1 - its value
-    double scale_factor_2 = pow(10, db_rel/20);                                                           //if min_vol_dB_rel_to_max = -60 dB, at 10% this evaluates to -54 dB
+
+    double min_dBFS = i2s_config_ptr->min_vol_dBFS;     
+    double max_dBFS = i2s_config_ptr->max_vol_dBFS;
+
+    double set_vol_dBFS = set_vol_perc/100 * (max_dBFS - min_dBFS) + min_dBFS;      
+
+    double vol_scale_factor = pow(10, set_vol_dBFS/20);                                     //Setting the upper end of the dynamic range of the volume control
 
     if (i2s_config_ptr->set_vol_percent > i2s_config_ptr->min_vol_percent){
-        i2s_config_ptr->vol_scale_factor = scale_factor_1 * scale_factor_2;
-        i2s_config_ptr->actual_dbFS = 20 * log(i2s_config_ptr->vol_scale_factor / 1);
+        i2s_config_ptr->vol_scale_factor = vol_scale_factor;
+        i2s_config_ptr->actual_dbFS = set_vol_dBFS;
     }
     else{
         i2s_config_ptr->vol_scale_factor = 0;                                   //Set volume to 0 if below the defined minimum
@@ -136,24 +141,37 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
     }
     // printf("Postload audio pos: %i\n", audio_chunk_ptr->chunk_data_pos);
 
+    stp_sd__wavFile* wave_file_ptr = audio_chunk_ptr->wavFile_ptr;
+
+    if (audio_chunk_ptr->max_chunk_buf_size_bytes < i2s_config_ptr->buf_len * sizeof(int32_t))
+    {
+        ESP_LOGE(TAG, "Audio Chunk Memory Buffer smaller than i2s memory buffer!");
+    }
+
     while(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
     {
+        stp_sd__reload_chunk_memory_buffer(audio_chunk_ptr, wave_file_ptr);
         int buf_pos = 0;
         int chunk_samples_loaded = 0;
+        memset(i2s_config_ptr->buf_ptr, 1, i2s_config_ptr->buf_len*sizeof(int32_t));
         for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++)
         {
             if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
             {
-                double sample = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
-                double test_scaled_sample = sample * i2s_config_ptr->vol_scale_factor;
-                int32_t scaled_sample = (int32_t)(sample * .1);//i2s_config_ptr->vol_scale_factor);
+                int32_t next_sample;
+                int remaining_buf_bytes = i2s_config_ptr->buf_len - buf_pos;
+                stp_sd__get_next_audio_sample(audio_chunk_ptr, &remaining_buf_bytes, &next_sample); //set the next audio data point to the next_sample variable
+                double double_scaled_sample = (double)next_sample * i2s_config_ptr->vol_scale_factor;
+                int32_t scaled_sample = (int32_t)(double_scaled_sample);//i2s_config_ptr->vol_scale_factor);
                 i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
-                if(buf_pos == 10){
-                    // printf("Postload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
-                }
-                audio_chunk_ptr->chunk_data_pos++;
-                audio_chunk_ptr->data_idx++;
+
+                //audio_chunk_ptr->chunk_data_pos is incremented within the stp_sd_get_next_audio_sample function
                 chunk_samples_loaded++;
+                if(audio_chunk_ptr->memory_buffer_pos > audio_chunk_ptr->capacity)
+                {
+                    ESP_LOGE(TAG, "Error, memory buffer overflow!");
+                    return ESP_FAIL;
+                }
             }
             else
             {
@@ -172,7 +190,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
                                         portMAX_DELAY);
         // printf("Bytes written: %i\n", bytes_written);
 
-        audio_chunk_ptr->chunk_data_pos = audio_chunk_ptr->chunk_data_pos - chunk_samples_loaded + bytes_written / sizeof(int32_t);
+        audio_chunk_ptr->chunk_data_pos = audio_chunk_ptr->chunk_data_pos - chunk_samples_loaded + (bytes_written / sizeof(int32_t)); //
 
         if(ret != ESP_OK){
             ESP_LOGE(TAG, "i2s write failed!");
@@ -186,13 +204,19 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
         // Let ESP do something else in between writes
         vTaskDelay(pdMS_TO_TICKS(i2s_config_ptr->ms_delay_between_writes));
     }
+
+    size_t bytes_to_write = i2s_config_ptr->buf_capacity;
+    size_t bytes_written  = 0;
+
+    printf("Bytes cleared from I2S bus: %i\n", bytes_written);
     i2s_config_ptr->preloaded = false;
     audio_chunk_ptr->chunk_data_pos = 0;
     audio_chunk_ptr->data_idx = audio_chunk_ptr->start_idx;
 
     return ESP_OK;
-}
 
+}
+    
 
 esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc){
     
@@ -205,6 +229,7 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
 
     audio_chunk_ptr->chunk_data_pos = 0;
     audio_chunk_ptr->data_idx = audio_chunk_ptr->start_idx;
+    stp_sd__wavFile* wave_file_ptr = audio_chunk_ptr->wavFile_ptr;
 
     if(stp_i2s__set_vol_scale_factor(i2s_config_ptr, set_vol_perc) != ESP_OK){
         ESP_LOGE(TAG, "Error setting volume!");
@@ -216,14 +241,15 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
     {
         if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
         {
-            double sample = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
-            double test_scaled_sample = sample * i2s_config_ptr->vol_scale_factor;
-            int32_t scaled_sample = (int32_t)(sample * .1);//i2s_config_ptr->vol_scale_factor);
+            int32_t next_sample;
+            int remaining_buf_bytes = i2s_config_ptr->buf_len - buf_pos;
+            stp_sd__get_next_audio_sample(audio_chunk_ptr, &remaining_buf_bytes, &next_sample); //set the next audio data point to the next_sample variable
+            double double_scaled_sample = (double)next_sample * (double)(i2s_config_ptr->vol_scale_factor);
+            int32_t scaled_sample = (int32_t)(double_scaled_sample);//i2s_config_ptr->vol_scale_factor);
             i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
-            if(buf_pos == 960){
-                printf("Preload Buf pos: %i | audio_pos: %i | audio idx: %i | audio value %li\n", buf_pos, audio_chunk_ptr->chunk_data_pos, audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->chunk_data_pos]);
-            }
+
             audio_chunk_ptr->chunk_data_pos++;
+            audio_chunk_ptr->memory_buffer_pos++;
             audio_chunk_ptr->data_idx++;
             chunk_samples_loaded++;
         }
@@ -244,10 +270,10 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
 
     for (int i = 0; i<2; i++){
     ret = i2s_channel_preload_data(i2s_config_ptr->tx_chan,
-                                             i2s_config_ptr->buf_ptr,
-                                             bytes_to_write,
-                                             &bytes_written);
-    
+                                    i2s_config_ptr->buf_ptr,
+                                    bytes_to_write,
+                                    &bytes_written);
+
     buffer_bytes += bytes_written;
     num_preload_loops++;
     }
@@ -260,6 +286,7 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         return ESP_FAIL;
     }
     audio_chunk_ptr->chunk_data_pos = audio_chunk_ptr->chunk_data_pos - chunk_samples_loaded + bytes_written / sizeof(int32_t);
+    stp_sd__reload_chunk_memory_buffer(audio_chunk_ptr, wave_file_ptr);
 
     printf("Number of DMA Buffer Samples: %i\n", buffer_bytes/sizeof(int32_t));
     printf("Number of Preload Loops: %i\n", num_preload_loops);

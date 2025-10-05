@@ -18,7 +18,7 @@ typedef struct
     int dout_pin;
     int sample_rate_Hz;
     double max_vol_dBFS;
-    double min_vol_dB_rel_to_max;
+    double min_vol_dBFS;
     double set_vol_percent;
     double vol_scale_factor;
     double min_vol_percent;

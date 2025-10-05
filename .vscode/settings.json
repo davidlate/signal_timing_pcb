@@ -3,5 +3,7 @@
     "idf.openOcdConfigs": [
         "board/esp32s3-builtin.cfg"
     ],
-    "idf.port": "/dev/ttyACM0"
+    "idf.port": "/dev/ttyACM0",
+    "idf.espIdfPath": "/home/davidlate/esp/v5.4.2/esp-idf",
+    "idf.toolsPath": "/home/davidlate/.espressif"
 }
