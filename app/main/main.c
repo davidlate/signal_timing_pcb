@@ -172,10 +172,9 @@ void app_main(void)
 {
     char* TAG = "main";
 
-    
     printf("\33[?25l"); //Hide terminal cursor, quoted from https://stackoverflow.com/questions/30126490/how-to-hide-console-cursor-in-c;
 
-    stp_sd__spi_config spi_config ={
+    stp_sd__spi_config spi_config = {
         .open        = false,
         .mosi_di_pin = PIN_NUM_MOSI,
         .miso_do_pin = PIN_NUM_MISO,
@@ -184,7 +183,9 @@ void app_main(void)
         .mount_point = "/sdcard",
         .card_ptr    = NULL,
     };
-    if(stp_sd__mount_sd_card(&spi_config) != ESP_OK){
+
+    if(stp_sd__mount_sd_card(&spi_config) != ESP_OK)
+    {
         ESP_LOGE(TAG, "Error Mounting SD Card!");
         ESP_LOGI(TAG, "Trying to mount again...");
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -228,7 +229,6 @@ void app_main(void)
         return;
     }
 
-    
     stp_sd__wavFile wave_file = {
       .filename = AUDIO_FILENAME,
     };  
@@ -237,15 +237,35 @@ void app_main(void)
         return;
     }
 
+    QueueHandle_t reload_audio_buff_Queue;
+    reload_audio_buff_Queue = xQueueCreate(1, sizeof(stp_sd__reload_memory_data_struct));
+    if(reload_audio_buff_Queue == NULL) ESP_LOGE(TAG, "Error creating audio reload queue!");
+
+    stp_sd__reload_memory_Task_struct reload_mem_Task_struct = {
+        .reload_audio_buff_Queue = reload_audio_buff_Queue,
+        .wave_file_ptr = &wave_file,
+    };
+
+    BaseType_t reload_audio_memory_buff_task_created;
+    TaskHandle_t reload_audio_memory_buff_task = NULL;
+    int reload_audio_memory_buff_task_priority = 1;
+    print_task_created = xTaskCreate(stp_sd__threadsafe_reload_chunk_memory_buffer_Task, "Reload Audio Memory Buffer", 4096, &reload_mem_Task_struct, reload_audio_memory_buff_task_priority, &reload_audio_memory_buff_task);
+    if(print_task_created != pdPASS)
+    {
+        ESP_LOGE(TAG, "Error creating print to terminal update task!");
+        return;
+    }
+    
     stp_sd__audio_chunk_setup audio_chunk_setup = {
-        .chunk_len_wo_dither        = 7680,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
-        .rise_fall_num_samples      = 2400,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+        .chunk_len_wo_dither        = 5000,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .rise_fall_num_samples      = 0,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
         .padding_num_samples        = 100,      //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
         .pre_dither_num_samples     = 0,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
         .post_dither_num_samples    = 0,
-        .max_chunk_buf_size_bytes   = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*4+1, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
+        .chunk_buf_size_bytes       = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*2, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
         .wavFile_ptr                = &wave_file,
-    } ;
+        .reload_audio_buff_Queue    = reload_audio_buff_Queue,
+    };
     stp_sd__audio_chunk audio_chunk = {0};
     stp_sd__init_audio_chunk(&audio_chunk_setup, &audio_chunk);
 
@@ -269,6 +289,8 @@ void app_main(void)
                         };
     ESP_ERROR_CHECK(stp_i2s__i2s_channel_setup(&i2s_config));
 
+    ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
+    gpio_set_level(XSMT_PIN, 1);
 
     for(int i=0; i<500; i++){
 
@@ -277,17 +299,15 @@ void app_main(void)
         if(xSemaphoreTake(adc_update_struct.adc_mutex, portMAX_DELAY) != pdTRUE) ESP_LOGE(TAG, "Error taking adc mutex for volume!");
         double vol_set_perc = (adc_update_struct.adc_results).vol_percent;
         // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
-        ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
-        gpio_set_level(XSMT_PIN, 1);
+        // ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
+        // gpio_set_level(XSMT_PIN, 1);
         ESP_ERROR_CHECK(stp_i2s__play_audio_chunk(&i2s_config, &audio_chunk, vol_set_perc));
         
         xSemaphoreGive(adc_update_struct.adc_mutex);
         // gpio_set_level(XSMT_PIN, 0);
-        ESP_ERROR_CHECK(stp_i2s__i2s_channel_disable(&i2s_config));
+        // ESP_ERROR_CHECK(stp_i2s__i2s_channel_disable(&i2s_config));
         vTaskDelay(pdMS_TO_TICKS(500));
-
     }
-
 
     if(stp_sd__free_audio_chunk(&audio_chunk) != ESP_OK){
         ESP_LOGE(TAG, "Error destructing audio chunk!");
@@ -301,6 +321,5 @@ void app_main(void)
         ESP_LOGE(TAG, "Error unmounting SD card");
         return;
     }
-
     return;
 }

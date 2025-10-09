@@ -98,7 +98,3 @@ esp_err_t stp_adc__read_all_adc_chans(stp_adc__adc_chan_struct* adc_chan_handle_
     
     return ESP_OK;
 }
-
-
-
-
