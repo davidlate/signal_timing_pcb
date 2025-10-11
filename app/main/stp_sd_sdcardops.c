@@ -291,8 +291,8 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
     int A_idx = 0;
     int B_idx = A_idx + audio_chunk_setup_ptr->pre_dither_num_samples;
     int C_idx = B_idx + audio_chunk_setup_ptr->rise_fall_num_samples;
-    int D_idx = C_idx + audio_chunk_setup_ptr->chunk_len_wo_dither - audio_chunk_ptr->rise_fall_num_samples;
-    int E_idx = D_idx + audio_chunk_setup_ptr->rise_fall_num_samples;
+    int D_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither - audio_chunk_setup_ptr->rise_fall_num_samples;
+    int E_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither;
     int F_idx = E_idx + audio_chunk_setup_ptr->post_dither_num_samples;
     
     stp_sd__wavFile* wave_file_ptr = audio_chunk_setup_ptr->wavFile_ptr;
@@ -311,22 +311,6 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
     audio_chunk_ptr->reload_audio_buff_Queue  = audio_chunk_setup_ptr->reload_audio_buff_Queue;
     audio_chunk_ptr->reload_memory_struct_ptr = audio_chunk_setup_ptr->reload_memory_struct_ptr;
 
-
-    audio_chunk_ptr->chunk_data_ptr = malloc(audio_chunk_ptr->capacity );
-    audio_chunk_ptr->chunk_load_ptr = malloc(audio_chunk_ptr->capacity );
-
-    if (audio_chunk_ptr->chunk_data_ptr==NULL || audio_chunk_ptr->chunk_load_ptr==NULL)
-    {
-        ESP_LOGE(TAG, "No memory available for audio chunk!");
-        return ESP_FAIL;
-    }
-
-
-    if(wave_file_ptr->fp == NULL)
-    {
-        ESP_LOGE(TAG, "Wave file not open!");
-        return ESP_FAIL;
-    }
     /*Get locations of the start- and end- idxs of the allowable space where we can take our audio file from, in no. of bytes from beginning of file, that we can grab our chunk from.*/
     long int start_file_pos_samples = ((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + audio_chunk_ptr->padding_num_samples;
     long int end_file_pos_samples   = ((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   - audio_chunk_ptr->padding_num_samples - audio_chunk_ptr->chunk_len_wo_dither;
@@ -337,7 +321,7 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
         ESP_LOGE(TAG, "Audio chunk is longer than available audio data!  Increase file length, or decrease chunk length or chunk padding.");
         return ESP_FAIL;
     }
- 
+
     audio_chunk_ptr->chunk_len_wo_dither     = audio_chunk_setup_ptr->chunk_len_wo_dither;
     audio_chunk_ptr->rise_fall_num_samples   = audio_chunk_setup_ptr->rise_fall_num_samples;
     audio_chunk_ptr->padding_num_samples     = audio_chunk_setup_ptr->padding_num_samples;
@@ -347,7 +331,36 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
     audio_chunk_ptr->end_file_pos_samples    = end_file_pos_samples;
     audio_chunk_ptr->delta_file_pos_samples  = delta_file_pos_samples;
     audio_chunk_ptr->memory_buffer_pos       = 0;
-    
+
+    audio_chunk_ptr->chunk_data_ptr   = malloc(audio_chunk_ptr->capacity);
+    assert(audio_chunk_ptr->chunk_data_ptr);
+    audio_chunk_ptr->chunk_load_ptr   = malloc(audio_chunk_ptr->capacity);
+    assert(audio_chunk_ptr->chunk_load_ptr);
+    int max_rise_fall_samples = 1e9;
+    if(audio_chunk_setup_ptr->rise_fall_num_samples <= max_rise_fall_samples)
+    {
+        if (audio_chunk_setup_ptr->rise_fall_num_samples > 0)
+        {
+            audio_chunk_ptr->cos_ramp_LUT_ptr = malloc(audio_chunk_setup_ptr->rise_fall_num_samples*sizeof(int32_t));
+            assert(audio_chunk_ptr->cos_ramp_LUT_ptr);
+            for(int i=0; i<audio_chunk_ptr->rise_fall_num_samples; i++)
+            {
+                float rise_frac    = (float)1 - ((float)i / (float)(audio_chunk_ptr->rise_fall_num_samples));
+                float cos_ramp     = ((float)1 + cos(rise_frac * M_PI))/2;
+                audio_chunk_ptr->cos_ramp_LUT_ptr[i] = cos_ramp;
+            }
+        }
+    }
+    else{
+        ESP_LOGE(TAG, "No more than %i samples allowed for cos^2 rise/fall!", max_rise_fall_samples);
+        return ESP_FAIL;
+    }
+
+    if(wave_file_ptr->fp == NULL)
+    {
+        ESP_LOGE(TAG, "Wave file not open!");
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 
@@ -427,32 +440,27 @@ esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk* audio_chunk_ptr, in
     else if (chunk_data_pos >= B_idx && chunk_data_pos<C_idx)
     {
         int i = chunk_data_pos - B_idx;
-        double rise_frac    = (double)1 - ((double)i - (double)B_idx) / (double)(audio_chunk_ptr->rise_fall_num_samples);
-        double cos_ramp     = pow(cos(rise_frac * M_PI/2), 2);
-        next_sample_double  = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]) * cos_ramp;
+        next_sample_double  = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]) * (audio_chunk_ptr->cos_ramp_LUT_ptr[i]);
         *next_sample_ptr    = (int32_t)next_sample_double;
         audio_chunk_ptr->chunk_data_pos++;
         audio_chunk_ptr->memory_buffer_pos++;
-        audio_chunk_ptr->data_idx++; //TODO check this variable
+        audio_chunk_ptr->data_idx++; 
     }
     else if (chunk_data_pos >= C_idx && chunk_data_pos<D_idx)
     {
-        next_sample_double  = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]);
-        *next_sample_ptr    = (int32_t)next_sample_double;
+        *next_sample_ptr = audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos];
         audio_chunk_ptr->chunk_data_pos++;
         audio_chunk_ptr->memory_buffer_pos++;
-        audio_chunk_ptr->data_idx++; //TODO check this variable
+        audio_chunk_ptr->data_idx++;
     }
     else if (chunk_data_pos >= D_idx && chunk_data_pos<E_idx)
     {
-        int i = chunk_data_pos - D_idx;
-        double fall_frac    = ((double)i - (double)D_idx) / (double)(audio_chunk_ptr->rise_fall_num_samples);
-        double cos_ramp     = pow(cos(fall_frac * M_PI/2), 2);
-        next_sample_double  = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]) * cos_ramp;
+        int i_reverse = E_idx - chunk_data_pos;
+        next_sample_double  = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]) * (audio_chunk_ptr->cos_ramp_LUT_ptr[i_reverse]);
         *next_sample_ptr    = (int32_t)next_sample_double;
         audio_chunk_ptr->chunk_data_pos++;
         audio_chunk_ptr->memory_buffer_pos++;
-        audio_chunk_ptr->data_idx++; //TODO check this variable
+        audio_chunk_ptr->data_idx++;
     }
     else if (chunk_data_pos >= E_idx && chunk_data_pos<F_idx)
     {
@@ -488,50 +496,8 @@ esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk* audio_chunk_ptr, in
     return ESP_OK;
 }
 
-
-// //This function reloads the array being used to supply audio data from the SD card wav file.
-// // This does NOT advance the chunk_data_pos, buffer is reloaded starting at the current sample, even if that sample has already been played.
-// esp_err_t stp_sd__reload_chunk_memory_buffer(stp_sd__audio_chunk* audio_chunk_ptr, stp_sd__wavFile* wave_file_ptr){
-
-//     char* TAG = "reload_memory_chunk";
-//     int32_t audio_chunk_pos_minus_dither = audio_chunk_ptr->chunk_data_pos - audio_chunk_ptr->B_idx;
-//     long current_filebytes = audio_chunk_ptr->chunk_start_pos_filebytes + audio_chunk_pos_minus_dither*sizeof(*(audio_chunk_ptr->chunk_data_ptr));
-//     //Set file position in SD card wav file to match the current audio_chunk_data_pos sample
-//     int ret = fseek(wave_file_ptr->fp, current_filebytes, SEEK_SET);
-//     if (ret != ESP_OK){     
-//         ESP_LOGE(TAG, "Error setting new file position!");
-//         return ESP_FAIL;
-//     }
-
-//     size_t num_samples_to_read;
-//     size_t num_non_dither_samples_remaining_in_chunk;
-
-//     num_non_dither_samples_remaining_in_chunk = audio_chunk_ptr->chunk_len_wo_dither - audio_chunk_ptr->chunk_data_pos - audio_chunk_ptr->B_idx;
-
-//     if (audio_chunk_ptr->capacity/sizeof(int32_t) > num_non_dither_samples_remaining_in_chunk)
-//     {
-//         num_samples_to_read = audio_chunk_ptr->capacity/sizeof(int32_t);
-//     }
-//     else
-//     {
-//         num_samples_to_read = num_non_dither_samples_remaining_in_chunk;
-//     }
-//     memset(audio_chunk_ptr->chunk_data_ptr, 0, audio_chunk_ptr->capacity);
-    
-//     int num_samples_read = fread(audio_chunk_ptr->chunk_data_ptr, sizeof(int32_t), num_samples_to_read, wave_file_ptr->fp); //Fill center of audio chunk
-//     if(num_samples_read != num_samples_to_read)
-//     {
-//         ESP_LOGE(TAG, "Not enough samples were read from the file!");
-//         return ESP_FAIL;
-//     }
-//     //Re-zero memory buffer
-//     audio_chunk_ptr->memory_buffer_pos = 0;
-//     return ESP_OK;
-// };
-
 //This function reloads the array being used to supply audio data from the SD card wav file.
 // This does NOT advance the chunk_data_pos, buffer is reloaded starting at the current sample, even if that sample has already been played.
-
 void stp_sd__threadsafe_reload_chunk_memory_buffer_Task(void* pvParameters){
 
     char* TAG = "reload_memory_chunk";
@@ -563,16 +529,10 @@ void stp_sd__threadsafe_reload_chunk_memory_buffer_Task(void* pvParameters){
 
             if(num_non_dither_samples_remaining_in_chunk > 0)   //If this is less than 0, it means we already have enough samples loaded to finish the transmission
             {
-                if (num_non_dither_samples_remaining_in_chunk > reload_struct.chunk_load_ptr_cap/sizeof(int32_t))
-                {
-                    num_samples_to_read = reload_struct.chunk_load_ptr_cap/sizeof(int32_t);
-                }
-                else
-                {
-                    num_samples_to_read = num_non_dither_samples_remaining_in_chunk;
-                }
+
+                num_samples_to_read = reload_struct.chunk_load_ptr_cap/sizeof(int32_t);
                 memset(reload_struct.chunk_load_ptr, 0, reload_struct.chunk_load_ptr_cap);
-                int num_samples_read = fread(reload_struct.chunk_load_ptr, sizeof(int32_t), reload_struct.chunk_load_ptr_cap/sizeof(int32_t), wave_file_ptr->fp); //Fill center of audio chunk
+                int num_samples_read = fread(reload_struct.chunk_load_ptr, sizeof(int32_t), num_samples_to_read, wave_file_ptr->fp); //Fill center of audio chunk
                 if(num_samples_read != num_samples_to_read)
                 {
                     ESP_LOGE(TAG, "Not enough samples were read from the file!");
@@ -580,7 +540,6 @@ void stp_sd__threadsafe_reload_chunk_memory_buffer_Task(void* pvParameters){
                 }
                 xTaskNotify(reload_struct.task_to_notify, 0, eNoAction);      //If file read comes out okay, notify the calling task to continue execution
             }
-
             else
             {
                 xTaskNotify(reload_struct.task_to_notify, 0, eNoAction);      //If file read comes out okay, notify the calling task to continue execution

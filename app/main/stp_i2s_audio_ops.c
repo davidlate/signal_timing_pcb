@@ -178,13 +178,13 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
                 if(time_to_reload == true)
                 {
                     uint32_t load_result;
-                    if(xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &load_result, 0) != pdFALSE)
+                    if(xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &load_result, 10) != pdFALSE)
                     {
-                        printf("\nidx: %i: %li\n", audio_chunk_ptr->data_idx-1, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos-1]);
+                        // printf("\nidx: %i: %li\n", audio_chunk_ptr->data_idx-1, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos-1]);
                         memcpy(audio_chunk_ptr->chunk_data_ptr, reload_memory_struct_ptr->chunk_load_ptr, reload_memory_struct_ptr->chunk_load_ptr_cap);
                         audio_chunk_ptr->memory_buffer_pos = 0;
                         reload_memory_struct_ptr->new_chunk_data_pos = audio_chunk_ptr->chunk_data_pos + audio_chunk_ptr->capacity / sizeof(int32_t);
-                        printf("idx: %i: %li\n", audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]);
+                        // printf("idx: %i: %li\n", audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]);
                         if(xQueueSend(audio_chunk_ptr->reload_audio_buff_Queue, reload_memory_struct_ptr, 0) != pdTRUE) ESP_LOGE(TAG, "Failed to send to Queue!");
                     }
                     else
@@ -192,7 +192,7 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
                         ESP_LOGE(TAG, "Reloaded memory chunk not loaded yet!");
                     }
                 }
-                double double_scaled_sample = (double)next_sample;// * i2s_config_ptr->vol_scale_factor;// * i2s_config_ptr->vol_scale_factor;
+                double double_scaled_sample = (double)next_sample * i2s_config_ptr->vol_scale_factor;// * i2s_config_ptr->vol_scale_factor;// * i2s_config_ptr->vol_scale_factor;
                 int32_t scaled_sample = (int32_t)(double_scaled_sample);//i2s_config_ptr->vol_scale_factor);
                 i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
 
