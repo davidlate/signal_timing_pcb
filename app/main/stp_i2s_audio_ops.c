@@ -142,17 +142,29 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
             // return ESP_FAIL;
         }
     }
-
-    if (audio_chunk_ptr->chunk_buf_size_bytes < i2s_config_ptr->buf_len * sizeof(int32_t))
+    if (audio_chunk_ptr->capacity < i2s_config_ptr->buf_len * sizeof(int32_t))
     {
         ESP_LOGE(TAG, "Audio Chunk Memory Buffer smaller than i2s memory buffer!");
     }
 
     int i = 0;
+
+    stp_sd__reload_memory_data_struct* reload_memory_struct_ptr = audio_chunk_ptr->reload_memory_struct_ptr;
+
+    reload_memory_struct_ptr->B_idx                     = audio_chunk_ptr->B_idx;
+    reload_memory_struct_ptr->new_chunk_data_pos        = audio_chunk_ptr->chunk_data_pos + audio_chunk_ptr->capacity/sizeof(int32_t);
+    reload_memory_struct_ptr->chunk_len_wo_dither       = audio_chunk_ptr->chunk_len_wo_dither;
+    reload_memory_struct_ptr->chunk_load_ptr            = audio_chunk_ptr->chunk_load_ptr;
+    reload_memory_struct_ptr->chunk_start_pos_filebytes = audio_chunk_ptr->chunk_start_pos_filebytes;
+    reload_memory_struct_ptr->task_to_notify            = xTaskGetCurrentTaskHandle();
+    reload_memory_struct_ptr->chunk_load_ptr_cap        = audio_chunk_ptr->capacity;
+    
+    size_t bytes_written = 0;
+
+    if(xQueueSend(audio_chunk_ptr->reload_audio_buff_Queue, reload_memory_struct_ptr, 0) != pdTRUE) ESP_LOGE(TAG, "Failed to send to Queue!");
+    //TODO keep going here
     while(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
     {
-        // stp_sd__reload_chunk_memory_buffer(audio_chunk_ptr, wave_file_ptr);
-        audio_chunk_ptr->memory_buffer_pos = 0;
         int buf_pos = 0;
         int chunk_samples_loaded = 0;
 
@@ -161,27 +173,44 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
             if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
             {
                 int32_t next_sample;
-                stp_sd__get_next_audio_sample(audio_chunk_ptr, &next_sample); //set the next audio data point to the next_sample variable
-                double double_scaled_sample = (double)next_sample;// * i2s_config_ptr->vol_scale_factor;
+                bool time_to_reload = false;
+                stp_sd__get_next_audio_sample(audio_chunk_ptr, &next_sample, &time_to_reload); //set the next audio data point to the next_sample variable
+                if(time_to_reload == true)
+                {
+                    uint32_t load_result;
+                    if(xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &load_result, 0) != pdFALSE)
+                    {
+                        printf("\nidx: %i: %li\n", audio_chunk_ptr->data_idx-1, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos-1]);
+                        memcpy(audio_chunk_ptr->chunk_data_ptr, reload_memory_struct_ptr->chunk_load_ptr, reload_memory_struct_ptr->chunk_load_ptr_cap);
+                        audio_chunk_ptr->memory_buffer_pos = 0;
+                        reload_memory_struct_ptr->new_chunk_data_pos = audio_chunk_ptr->chunk_data_pos + audio_chunk_ptr->capacity / sizeof(int32_t);
+                        printf("idx: %i: %li\n", audio_chunk_ptr->data_idx, audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]);
+                        if(xQueueSend(audio_chunk_ptr->reload_audio_buff_Queue, reload_memory_struct_ptr, 0) != pdTRUE) ESP_LOGE(TAG, "Failed to send to Queue!");
+                    }
+                    else
+                    {
+                        ESP_LOGE(TAG, "Reloaded memory chunk not loaded yet!");
+                    }
+                }
+                double double_scaled_sample = (double)next_sample;// * i2s_config_ptr->vol_scale_factor;// * i2s_config_ptr->vol_scale_factor;
                 int32_t scaled_sample = (int32_t)(double_scaled_sample);//i2s_config_ptr->vol_scale_factor);
                 i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
 
                 //audio_chunk_ptr->chunk_data_pos is incremented within the stp_sd_get_next_audio_sample function
                 chunk_samples_loaded++;
-                if(audio_chunk_ptr->memory_buffer_pos > audio_chunk_ptr->capacity)
+                if(audio_chunk_ptr->memory_buffer_pos > audio_chunk_ptr->capacity/sizeof(int32_t))
                 {
                     ESP_LOGE(TAG, "Error, memory buffer overflow!");
-                    // return ESP_FAIL;
                 }
             }
             else
             {
                 i2s_config_ptr->buf_ptr[buf_pos] = 1;
-                // printf("Audio at end of chunk\n");
             }
         }
         size_t bytes_to_write = buf_pos * sizeof(*(audio_chunk_ptr->chunk_data_ptr));
-        size_t bytes_written = 0;
+        bytes_written = 0;
+
         // printf("postload samples to write: %i\n", bytes_to_write/sizeof(int32_t));
         esp_err_t ret = i2s_channel_write(i2s_config_ptr->tx_chan,
                                         i2s_config_ptr->buf_ptr,
@@ -205,9 +234,8 @@ esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd_
         {
             i2s_config_ptr->buf_ptr[j] = 1;
         }
-
         /*DMA Buffers _must_ be zeroed when call is finished - setting all values to 1 to prevent PCM5102a from popping*/
-    size_t bytes_written = 0;
+    bytes_written = 0;
     i2s_channel_write(i2s_config_ptr->tx_chan,
                         i2s_config_ptr->buf_ptr,
                         i2s_config_ptr->buf_len*sizeof(int32_t) ,
@@ -246,8 +274,9 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
         if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
         {
             int32_t next_sample;
+            bool time_to_reload = false;
             int remaining_buf_bytes = i2s_config_ptr->buf_len - buf_pos;
-            stp_sd__get_next_audio_sample(audio_chunk_ptr, &next_sample); //set the next audio data point to the next_sample variable
+            stp_sd__get_next_audio_sample(audio_chunk_ptr, &next_sample, &time_to_reload); //set the next audio data point to the next_sample variable
             double double_scaled_sample = (double)next_sample * (double)(i2s_config_ptr->vol_scale_factor);
             int32_t scaled_sample = (int32_t)(double_scaled_sample);//i2s_config_ptr->vol_scale_factor);
             i2s_config_ptr->buf_ptr[buf_pos] = scaled_sample;
@@ -272,7 +301,6 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
     size_t num_preload_loops = 0;
     esp_err_t ret;
 
-    for (int i = 0; i<2; i++){
     ret = i2s_channel_preload_data(i2s_config_ptr->tx_chan,
                                     i2s_config_ptr->buf_ptr,
                                     bytes_to_write,
@@ -280,7 +308,7 @@ esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__a
 
     buffer_bytes += bytes_written;
     num_preload_loops++;
-    }
+    
     if(ret != ESP_OK){
         ESP_LOGE(TAG, "i2s preload failed!");
         return ESP_FAIL;

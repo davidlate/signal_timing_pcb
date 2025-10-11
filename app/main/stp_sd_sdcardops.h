@@ -53,6 +53,21 @@ typedef struct {
     long int  audiofile_data_end_pos;
 } stp_sd__wavFile;
 
+typedef struct {        //This is used to pass the requisite data to the task that reloads the memory buffer while the audio task runs.
+    int      new_chunk_data_pos;
+    int      B_idx;
+    int      chunk_start_pos_filebytes;
+    int      chunk_len_wo_dither;
+    int32_t* chunk_load_ptr;
+    int      chunk_load_ptr_cap;
+    TaskHandle_t task_to_notify;
+} stp_sd__reload_memory_data_struct;
+
+typedef struct {        //This is used to pass the requisite data to the task that reloads the memory buffer while the audio task runs.
+    stp_sd__wavFile*    wave_file_ptr;
+    QueueHandle_t       reload_audio_buff_Queue;
+} stp_sd__reload_memory_Task_struct;
+
 typedef struct {
     int              chunk_len_wo_dither;         //REQUIRED INPUT: length of chunk in number of samples, not including dither
     int              rise_fall_num_samples;       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
@@ -63,6 +78,7 @@ typedef struct {
     int              capacity;
     stp_sd__wavFile* wavFile_ptr;                 //Pointer to wave file object used for audio
     QueueHandle_t    reload_audio_buff_Queue;
+    stp_sd__reload_memory_data_struct* reload_memory_struct_ptr;
 } stp_sd__audio_chunk_setup;
 
 typedef struct {
@@ -71,7 +87,6 @@ typedef struct {
     int              padding_num_samples;         //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
     int              pre_dither_num_samples;      //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
     int              post_dither_num_samples;
-    int              chunk_buf_size_bytes;    
     stp_sd__wavFile* wavFile_ptr;                 //Pointer to wave file object used for audio
     int              capacity;                    //memory capacity of chunk_data_ptr
     int              chunk_size;                  //size of chunk in bytes
@@ -94,23 +109,10 @@ typedef struct {
     int              delta_file_pos_samples;
     long             chunk_start_pos_filebytes;  //In the wav file on the sd card, this is the number of bytes from the beginning of the file to the point of the beginning of the audio chunk
     QueueHandle_t    reload_audio_buff_Queue;
+    stp_sd__reload_memory_data_struct* reload_memory_struct_ptr;
+
 } stp_sd__audio_chunk;
 
-typedef struct {        //This is used to pass the requisite data to the task that reloads the memory buffer while the audio task runs.
-    int      chunk_data_pos;
-    int      B_idx;
-    int      chunk_start_pos_filebytes;
-    int      chunk_len_wo_dither;
-    int      chunk_buf_size_bytes;
-    int32_t* chunk_load_ptr;
-    TaskHandle_t task_to_notify;
-
-} stp_sd__reload_memory_data_struct;
-
-typedef struct {        //This is used to pass the requisite data to the task that reloads the memory buffer while the audio task runs.
-    stp_sd__wavFile*    wave_file_ptr;
-    QueueHandle_t       reload_audio_buff_Queue;
-} stp_sd__reload_memory_Task_struct;
 
 esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config*);
 esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config*);
@@ -122,7 +124,7 @@ esp_err_t stp_sd__open_audio_file(stp_sd__wavFile*);
 esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup*, stp_sd__audio_chunk*);
 
 esp_err_t stp_sd__get_new_audio_chunk(stp_sd__audio_chunk*, stp_sd__wavFile*, bool);
-esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk*, int32_t*);
+esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk*, int32_t*, bool*);
 esp_err_t stp_sd__reload_chunk_memory_buffer(stp_sd__audio_chunk*, stp_sd__wavFile*);
 
 void stp_sd__threadsafe_reload_chunk_memory_buffer_Task(void*);

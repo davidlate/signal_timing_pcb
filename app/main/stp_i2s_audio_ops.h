@@ -3,7 +3,6 @@
 
 #include "stp_sd_sdcardops.h"
 
-
 typedef struct
 {
     i2s_chan_handle_t    tx_chan;                           //Channel handle for current I2S channel

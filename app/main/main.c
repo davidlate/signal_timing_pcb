@@ -64,9 +64,6 @@
 #define HVDIV_ADC_UNIT  ADC_UNIT_2
 #define HVDIV_ADC_CHAN  ADC_CHANNEL_7
 
-#define ADC_UPDATE_PERIOD_MS    100
-#define PRINT_UPDATE_PERIOD_MS  100
-
 //PWM Pin defines
 #define CH1_CURSET_PIN  GPIO_NUM_2
 #define CH2_CURSET_PIN  GPIO_NUM_47
@@ -86,6 +83,13 @@ const int SAMPLE_RATE    = 96000;
 const int NUM_DMA_BUFF   = 8;
 const int SIZE_DMA_BUFF  = 500;         //can go up to 500
 
+#define MAX_VOL_DBFS            -20
+#define MIN_VOL_DBFS            -60
+
+#define ADC_UPDATE_PERIOD_MS    100
+#define PRINT_UPDATE_PERIOD_MS  100
+#define BACKGROUND_TASK_PRIORTIY 1
+#define AUDIO_TASK_PRIORITY      5
 
 typedef struct {
     SemaphoreHandle_t         adc_mutex;
@@ -197,7 +201,7 @@ void app_main(void)
 
     BaseType_t flash_light_task_created;
     TaskHandle_t flash_light_task = NULL;
-    int flash_light_task_priority = 0;
+    int flash_light_task_priority = BACKGROUND_TASK_PRIORTIY;
     flash_light_task_created = xTaskCreate(flash_lights, "Flash Lights", 1024, (void*) 0, flash_light_task_priority, &flash_light_task);
     if(flash_light_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating flashing light task!");
@@ -213,7 +217,7 @@ void app_main(void)
 
     BaseType_t adc_task_created;
     TaskHandle_t update_adc_task = NULL;
-    int adc_task_priority = 1;
+    int adc_task_priority = BACKGROUND_TASK_PRIORTIY;
     adc_task_created = xTaskCreate(update_adc, "Update ADC Values", 4096, &adc_update_struct, adc_task_priority, &update_adc_task);
     if(adc_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating adc update task!");
@@ -222,7 +226,7 @@ void app_main(void)
 
     BaseType_t print_task_created;
     TaskHandle_t update_print_task = NULL;
-    int print_task_priority = 1;
+    int print_task_priority = BACKGROUND_TASK_PRIORTIY;
     print_task_created = xTaskCreate(print_to_terminal, "Print to Terminal", 4096, &adc_update_struct, print_task_priority, &update_print_task);
     if(print_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating print to terminal update task!");
@@ -248,7 +252,7 @@ void app_main(void)
 
     BaseType_t reload_audio_memory_buff_task_created;
     TaskHandle_t reload_audio_memory_buff_task = NULL;
-    int reload_audio_memory_buff_task_priority = 1;
+    int reload_audio_memory_buff_task_priority = AUDIO_TASK_PRIORITY;
     print_task_created = xTaskCreate(stp_sd__threadsafe_reload_chunk_memory_buffer_Task, "Reload Audio Memory Buffer", 4096, &reload_mem_Task_struct, reload_audio_memory_buff_task_priority, &reload_audio_memory_buff_task);
     if(print_task_created != pdPASS)
     {
@@ -256,17 +260,21 @@ void app_main(void)
         return;
     }
     
+    stp_sd__reload_memory_data_struct reload_memory_struct = {};    //This is the data passed from the play_audio_chunk function to the reload_memory task
+                                                                    //It's defined here to be in both tasks scope.
     stp_sd__audio_chunk_setup audio_chunk_setup = {
-        .chunk_len_wo_dither        = 5000,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .chunk_len_wo_dither        = 96000,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
         .rise_fall_num_samples      = 0,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
         .padding_num_samples        = 100,      //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
         .pre_dither_num_samples     = 0,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
         .post_dither_num_samples    = 0,
-        .chunk_buf_size_bytes       = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*2, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
+        .chunk_buf_size_bytes       = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*2 * 4, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
         .wavFile_ptr                = &wave_file,
         .reload_audio_buff_Queue    = reload_audio_buff_Queue,
+        .reload_memory_struct_ptr   = &reload_memory_struct,
     };
-    stp_sd__audio_chunk audio_chunk = {0};
+
+    stp_sd__audio_chunk audio_chunk = {};
     stp_sd__init_audio_chunk(&audio_chunk_setup, &audio_chunk);
 
     stp_i2s__i2s_config i2s_config = {
@@ -279,8 +287,8 @@ void app_main(void)
                         .ws_pin                   = I2S_WS_PIN,
                         .dout_pin                 = I2S_DOUT_PIN,
                         .sample_rate_Hz           = SAMPLE_RATE,
-                        .max_vol_dBFS             = -20,
-                        .min_vol_dBFS             = -60,
+                        .max_vol_dBFS             = MAX_VOL_DBFS,
+                        .min_vol_dBFS             = MIN_VOL_DBFS,
                         .set_vol_percent          = 10,
                         .vol_scale_factor         = 0,
                         .min_vol_percent          = 2,
