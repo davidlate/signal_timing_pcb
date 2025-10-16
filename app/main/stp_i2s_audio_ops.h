@@ -23,18 +23,24 @@ typedef struct
     double min_vol_percent;
     double actual_dbFS;
     bool preloaded;
-} stp_i2s__i2s_config;
+} stp_audio__i2s_config;
+
+typedef struct {
+    i2s_chan_handle_t tx_chan;
+    TaskHandle_t Task_To_Notify;
+} Audio_GPTimer_Args_Struct;
 
 
-esp_err_t stp_i2s__i2s_channel_setup(stp_i2s__i2s_config* i2s_config_ptr);
 
-esp_err_t stp_i2s__i2s_channel_ISR_enable(stp_i2s__i2s_config* i2s_config_ptr);          //Begin I2S transmission using custom driver function.  See update i2s_common.c and .h in this repo.  
-esp_err_t stp_i2s__i2s_channel_ISR_enable_finish(stp_i2s__i2s_config* i2s_config_ptr);   //Keep freeRTOS happy and finish what i2s_channel_ISR_enable started in the ISR
+esp_err_t stp_audio__i2s_channel_setup(stp_audio__i2s_config* i2s_config_ptr);
 
-esp_err_t stp_i2s__play_audio_chunk(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc);
-esp_err_t stp_i2s__preload_buffer(stp_i2s__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc);
-esp_err_t stp_i2s__i2s_channel_enable(stp_i2s__i2s_config* i2s_config_ptr);
+esp_err_t stp_audio__i2s_channel_ISR_enable(stp_audio__i2s_config* i2s_config_ptr);          //Begin I2S transmission using custom driver function.  See update i2s_common.c and .h in this repo.  
+esp_err_t stp_audio__i2s_channel_ISR_enable_finish(stp_audio__i2s_config* i2s_config_ptr);   //Keep freeRTOS happy and finish what i2s_channel_ISR_enable started in the ISR
 
-esp_err_t stp_i2s__i2s_channel_disable(stp_i2s__i2s_config* i2s_config_ptr);
+esp_err_t stp_audio__play_audio_chunk(stp_audio__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc);
+esp_err_t stp_audio__preload_buffer(stp_audio__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc);
+esp_err_t stp_audio__i2s_channel_enable(stp_audio__i2s_config* i2s_config_ptr);
+
+esp_err_t stp_audio__i2s_channel_disable(stp_audio__i2s_config* i2s_config_ptr);
 
 #endif

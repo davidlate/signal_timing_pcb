@@ -410,7 +410,8 @@ esp_err_t stp_sd__get_new_audio_chunk(stp_sd__audio_chunk* audio_chunk_ptr, stp_
     audio_chunk_ptr->end_idx                   = audio_chunk_ptr->start_idx + chunk_end_offset;
     audio_chunk_ptr->data_idx                  = audio_chunk_ptr->start_idx;
     audio_chunk_ptr->chunk_start_pos_filebytes = chunk_start_pos_filebytes;
-    
+    audio_chunk_ptr->memory_buffer_pos         = 0;
+
     return ESP_OK;
 }
 
@@ -429,8 +430,6 @@ esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk* audio_chunk_ptr, in
 
     double next_sample_double = 0;
     int32_t dither_const = 1;
-    int x = audio_chunk_ptr->memory_buffer_pos;
-    int y = audio_chunk_ptr->capacity/sizeof(int32_t);
 
     if (chunk_data_pos >= A_idx && chunk_data_pos<B_idx)
     {
@@ -444,7 +443,7 @@ esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk* audio_chunk_ptr, in
         *next_sample_ptr    = (int32_t)next_sample_double;
         audio_chunk_ptr->chunk_data_pos++;
         audio_chunk_ptr->memory_buffer_pos++;
-        audio_chunk_ptr->data_idx++; 
+        audio_chunk_ptr->data_idx++;
     }
     else if (chunk_data_pos >= C_idx && chunk_data_pos<D_idx)
     {
@@ -464,7 +463,6 @@ esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk* audio_chunk_ptr, in
     }
     else if (chunk_data_pos >= E_idx && chunk_data_pos<F_idx)
     {
-        // audio_chunk_ptr->memory_buffer_pos++;
         *next_sample_ptr = dither_const;
         audio_chunk_ptr->chunk_data_pos++;
     }

@@ -27,11 +27,11 @@
 #include "stp_sd_sdcardops.h"
 #include "stp_i2s_audio_ops.h"
 #include "stp_adc.h"
-
+#include "driver/gptimer.h"
 
 //SD Card operation defines
-//#define AUDIO_FILENAME "/SINEA.wav"
-#define AUDIO_FILENAME "/WHITE.wav"
+#define AUDIO_FILENAME "/SINEA.wav"
+// #define AUDIO_FILENAME "/WHITE.wav"
 
 #define PIN_NUM_MISO  GPIO_NUM_13   //DO
 #define PIN_NUM_MOSI  GPIO_NUM_11   //DI
@@ -171,6 +171,25 @@ void print_to_terminal(void* pvParameters){
     }
 }
 
+static bool start_audio_GPTimer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
+{
+    Audio_GPTimer_Args_Struct* data_ptr = (Audio_GPTimer_Args_Struct*)user_ctx;
+    // i2s_channel_enable_from_ISR(data_ptr->tx_chan);
+    return 0;
+}
+
+void play_audio_Task(void* pvParameters)
+{
+
+    while (true)
+    {
+        int i = 0;
+        i++;
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+}
+
 
 void app_main(void)
 {
@@ -253,21 +272,21 @@ void app_main(void)
     BaseType_t reload_audio_memory_buff_task_created;
     TaskHandle_t reload_audio_memory_buff_task = NULL;
     int reload_audio_memory_buff_task_priority = AUDIO_TASK_PRIORITY;
-    print_task_created = xTaskCreate(stp_sd__threadsafe_reload_chunk_memory_buffer_Task, "Reload Audio Memory Buffer", 4096, &reload_mem_Task_struct, reload_audio_memory_buff_task_priority, &reload_audio_memory_buff_task);
-    if(print_task_created != pdPASS)
+    reload_audio_memory_buff_task_created = xTaskCreate(stp_sd__threadsafe_reload_chunk_memory_buffer_Task, "Reload Audio Memory Buffer", 4096, &reload_mem_Task_struct, reload_audio_memory_buff_task_priority, &reload_audio_memory_buff_task);
+    if(reload_audio_memory_buff_task_created != pdPASS)
     {
-        ESP_LOGE(TAG, "Error creating print to terminal update task!");
+        ESP_LOGE(TAG, "Error creating reload audio buffer update task!");
         return;
     }
     
     stp_sd__reload_memory_data_struct reload_memory_struct = {};    //This is the data passed from the play_audio_chunk function to the reload_memory task
                                                                     //It's defined here to be in both tasks scope.
     stp_sd__audio_chunk_setup audio_chunk_setup = {
-        .chunk_len_wo_dither        = 192000,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
-        .rise_fall_num_samples      = 9600,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+        .chunk_len_wo_dither        = 19200,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .rise_fall_num_samples      = 192,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
         .padding_num_samples        = 100,      //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
-        .pre_dither_num_samples     = 0,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
-        .post_dither_num_samples    = 0,
+        .pre_dither_num_samples     = 384,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+        .post_dither_num_samples    = 384,
         .chunk_buf_size_bytes       = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*2, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
         .wavFile_ptr                = &wave_file,
         .reload_audio_buff_Queue    = reload_audio_buff_Queue,
@@ -278,7 +297,7 @@ void app_main(void)
     stp_sd__audio_chunk audio_chunk = {};
     stp_sd__init_audio_chunk(&audio_chunk_setup, &audio_chunk);
 
-    stp_i2s__i2s_config i2s_config = {
+    stp_audio__i2s_config i2s_config = {
                         .buf_capacity             = 0,
                         .buf_len                  = 0,
                         .num_dma_buf              = NUM_DMA_BUFF,
@@ -296,9 +315,53 @@ void app_main(void)
                         .actual_dbFS              = 0,
                         .preloaded                = false
                         };
-    ESP_ERROR_CHECK(stp_i2s__i2s_channel_setup(&i2s_config));
+    ESP_ERROR_CHECK(stp_audio__i2s_channel_setup(&i2s_config));
 
-    ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
+
+    typedef struct {
+    stp_sd__audio_chunk* audio_chunk;
+    stp_audio__i2s_config* i2s_config;
+    } play_audio_task_setup_struct;
+    play_audio_task_setup_struct audio_setup_struct;
+    
+    BaseType_t play_audio_task_created;
+    TaskHandle_t play_audio_task = NULL;
+    int play_audio_task_priority = AUDIO_TASK_PRIORITY;
+    play_audio_task_created = xTaskCreate(play_audio_Task, "Play Audio Task", 4096, &audio_setup_struct, play_audio_task_priority, &play_audio_task);
+    if(play_audio_task_created != pdPASS)
+    {
+        ESP_LOGE(TAG, "Error creating audio play task!");
+        return;
+    }
+
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1 * 1000 * 1000, // 1MHz, 1 tick = 1us
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    gptimer_alarm_config_t alarm_config = {
+        .reload_count = 0, // counter will reload with 0 on alarm event
+        .alarm_count = 1000000, // period = 1s @resolution 1MHz
+        .flags.auto_reload_on_alarm = true, // enable auto-reload
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = start_audio_GPTimer_callback, // register user callback
+    };
+
+    Audio_GPTimer_Args_Struct timer_cb_args = {
+        .tx_chan = i2s_config.tx_chan,
+        .Task_To_Notify = play_audio_task,
+    };
+
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &timer_cb_args));
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
     gpio_set_level(XSMT_PIN, 1);
 
     for(int i=0; i<500; i++){
@@ -307,17 +370,18 @@ void app_main(void)
 
         if(xSemaphoreTake(adc_update_struct.adc_mutex, portMAX_DELAY) != pdTRUE) ESP_LOGE(TAG, "Error taking adc mutex for volume!");
         double vol_set_perc = (adc_update_struct.adc_results).vol_percent;
-        // ESP_ERROR_CHECK(stp_i2s__preload_buffer(&i2s_config, &audio_chunk, 20.0));
-        // ESP_ERROR_CHECK(stp_i2s__i2s_channel_enable(&i2s_config));
+        ESP_ERROR_CHECK(stp_audio__preload_buffer(&i2s_config, &audio_chunk, vol_set_perc));
         // gpio_set_level(XSMT_PIN, 1);
-        ESP_ERROR_CHECK(stp_i2s__play_audio_chunk(&i2s_config, &audio_chunk, vol_set_perc));
-        
-        xSemaphoreGive(adc_update_struct.adc_mutex);
-        // gpio_set_level(XSMT_PIN, 0);
-        // ESP_ERROR_CHECK(stp_i2s__i2s_channel_disable(&i2s_config));
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
+        i2s_channel_enable_from_ISR(i2s_config.tx_chan);
+        i2s_channel_finish_enabling_after_ISR(i2s_config.tx_chan);
+        ESP_ERROR_CHECK(stp_audio__play_audio_chunk(&i2s_config, &audio_chunk, vol_set_perc));
+        vTaskDelay(pdMS_TO_TICKS(250));
+        ESP_ERROR_CHECK(stp_audio__i2s_channel_disable(&i2s_config));
 
+        xSemaphoreGive(adc_update_struct.adc_mutex);
+        // gpio_set_level(XSMT_PIN, 0); 
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
     if(stp_sd__free_audio_chunk(&audio_chunk) != ESP_OK){
         ESP_LOGE(TAG, "Error destructing audio chunk!");
         return;

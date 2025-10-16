@@ -129,7 +129,6 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup*, stp_sd__audio_chu
 
 esp_err_t stp_sd__get_new_audio_chunk(stp_sd__audio_chunk*, stp_sd__wavFile*, bool);
 esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk*, int32_t*, bool*);
-esp_err_t stp_sd__reload_chunk_memory_buffer(stp_sd__audio_chunk*, stp_sd__wavFile*);
 
 void stp_sd__threadsafe_reload_chunk_memory_buffer_Task(void*);
 
