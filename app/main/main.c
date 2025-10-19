@@ -23,9 +23,10 @@
 #include "hal/adc_types.h"
 #include "esp_adc/adc_oneshot.h"
 #include "freertos/queue.h"
+#include "driver/ledc.h"
 
 #include "stp_sd_sdcardops.h"
-#include "stp_i2s_audio_ops.h"
+#include "stp_audio__audio_ops.h"
 #include "stp_adc.h"
 #include "driver/gptimer.h"
 
@@ -79,12 +80,14 @@
 #define I2S_DOUT_PIN GPIO_NUM_5      //DIN, 12 I2S data out io number
 #define I2S_BCK_PIN  GPIO_NUM_6      //BCK 11  I2S bit clock io number
 
-const int SAMPLE_RATE    = 96000;
-const int NUM_DMA_BUFF   = 8;
-const int SIZE_DMA_BUFF  = 500;         //can go up to 500
+#define SAMPLE_RATE    96000
+#define NUM_DMA_BUFF   8
+#define SIZE_DMA_BUFF  500         //can go up to 500
 
 #define MAX_VOL_DBFS            -20
 #define MIN_VOL_DBFS            -60
+
+#define AUDIO_PLAY_INTERVAL_MS  500
 
 #define ADC_UPDATE_PERIOD_MS    100
 #define PRINT_UPDATE_PERIOD_MS  100
@@ -95,6 +98,13 @@ typedef struct {
     SemaphoreHandle_t         adc_mutex;
     stp_adc__adc_chan_results adc_results;
 } Adc_Update_Struct;
+
+typedef struct {
+    stp_audio__i2s_config* i2s_config_ptr;
+    stp_sd__audio_chunk* audio_chunk_ptr;
+    stp_sd__wavFile* wave_file_ptr;
+    Adc_Update_Struct* adc_update_struct_ptr;
+} Audio_Task_Setup_Struct;
 
 void flash_lights(void * pvParameters){
 
@@ -157,6 +167,7 @@ void print_to_terminal(void* pvParameters){
         if (xSemaphoreTake(adc_update_struct->adc_mutex, portMAX_DELAY) == pdTRUE)
         {
             stp_adc__adc_chan_results adc_results = adc_update_struct->adc_results;
+            xSemaphoreGive(adc_update_struct->adc_mutex);
 
             printf("\rVol: %.0f%% | Ch2: %0.0f%% | Ch1: %0.0f%% |Batt: %.1fV | HV: %.1fV  ",
                 adc_results.vol_percent,
@@ -164,32 +175,89 @@ void print_to_terminal(void* pvParameters){
                 adc_results.ch2_percent,
                 adc_results.batt_voltage,
                 adc_results.hv_voltage);
-
-            xSemaphoreGive(adc_update_struct->adc_mutex);
         }
             vTaskDelay(pdMS_TO_TICKS(PRINT_UPDATE_PERIOD_MS));
     }
 }
 
-static bool start_audio_GPTimer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
+static bool IRAM_ATTR start_audio_GPTimer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
 {
     Audio_GPTimer_Args_Struct* data_ptr = (Audio_GPTimer_Args_Struct*)user_ctx;
-    // i2s_channel_enable_from_ISR(data_ptr->tx_chan);
+    
+    i2s_channel_enable_from_ISR(data_ptr->tx_chan);
+    QueueHandle_t audio_play_queue = data_ptr->queue;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    int8_t item_to_queue = 0;
+    xQueueSendFromISR(audio_play_queue, &item_to_queue, &xHigherPriorityTaskWoken);
     return 0;
 }
 
 void play_audio_Task(void* pvParameters)
 {
+    char* TAG = "play_audio_task";
+    Audio_Task_Setup_Struct* task_setup_struct_ptr = (Audio_Task_Setup_Struct*)pvParameters;
+    stp_audio__i2s_config* i2s_config_ptr    = task_setup_struct_ptr->i2s_config_ptr;
+    stp_sd__audio_chunk* audio_chunk_ptr     = task_setup_struct_ptr->audio_chunk_ptr;
+    stp_sd__wavFile* wave_file_ptr           = task_setup_struct_ptr->wave_file_ptr;
+    Adc_Update_Struct* adc_update_struct_ptr = task_setup_struct_ptr->adc_update_struct_ptr;
+
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1e6, // 1MHz, 1 tick = 1us
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    gptimer_alarm_config_t alarm_config = {
+        .reload_count = 0, // counter will reload with 0 on alarm event
+        .alarm_count = AUDIO_PLAY_INTERVAL_MS * 1000,
+        .flags.auto_reload_on_alarm = true, // enable auto-reload
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = start_audio_GPTimer_callback, // register user callback
+    };
+
+    QueueHandle_t start_audio_play_queue;
+    start_audio_play_queue = xQueueCreate(1, sizeof(int8_t));
+    if(start_audio_play_queue == NULL) ESP_LOGE(TAG, "Error creating audio play queue!");
+
+    Audio_GPTimer_Args_Struct timer_cb_args = {
+        .tx_chan = i2s_config_ptr->tx_chan,
+        .queue = start_audio_play_queue,
+    };
+
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &timer_cb_args));
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+    gpio_set_level(XSMT_PIN, 1);
 
     while (true)
     {
-        int i = 0;
-        i++;
-        vTaskDelay(pdMS_TO_TICKS(500));
+        bool use_random = false;
+        ESP_ERROR_CHECK(stp_sd__get_new_audio_chunk(audio_chunk_ptr, wave_file_ptr, use_random));
+
+        if(xSemaphoreTake(adc_update_struct_ptr->adc_mutex, portMAX_DELAY) != pdTRUE) ESP_LOGE(TAG, "Error taking adc mutex for volume!");
+        double vol_set_perc = (adc_update_struct_ptr->adc_results).vol_percent;
+        xSemaphoreGive(adc_update_struct_ptr->adc_mutex);
+
+        ESP_ERROR_CHECK(stp_audio__preload_buffer(i2s_config_ptr, audio_chunk_ptr, vol_set_perc));
+        int8_t queue_receive_num = 0; //placeholder for dummy item received from queue.
+        if(xQueueReceive(start_audio_play_queue, &queue_receive_num, portMAX_DELAY) == pdTRUE)
+        {
+            i2s_channel_finish_enabling_after_ISR(i2s_config_ptr->tx_chan);
+            ESP_ERROR_CHECK(stp_audio__play_audio_chunk(i2s_config_ptr, audio_chunk_ptr, vol_set_perc));
+            vTaskDelay(pdMS_TO_TICKS(50));
+            ESP_ERROR_CHECK(stp_audio__i2s_channel_disable(i2s_config_ptr));
+        }
+        else{
+            ESP_LOGE(TAG, "Play queue failure!\n\n");
+        }
     }
-
 }
-
 
 void app_main(void)
 {
@@ -282,8 +350,8 @@ void app_main(void)
     stp_sd__reload_memory_data_struct reload_memory_struct = {};    //This is the data passed from the play_audio_chunk function to the reload_memory task
                                                                     //It's defined here to be in both tasks scope.
     stp_sd__audio_chunk_setup audio_chunk_setup = {
-        .chunk_len_wo_dither        = 19200,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
-        .rise_fall_num_samples      = 192,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+        .chunk_len_wo_dither        = 9600,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .rise_fall_num_samples      = 2500,      //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
         .padding_num_samples        = 100,      //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
         .pre_dither_num_samples     = 384,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
         .post_dither_num_samples    = 384,
@@ -318,69 +386,28 @@ void app_main(void)
     ESP_ERROR_CHECK(stp_audio__i2s_channel_setup(&i2s_config));
 
 
-    typedef struct {
-    stp_sd__audio_chunk* audio_chunk;
-    stp_audio__i2s_config* i2s_config;
-    } play_audio_task_setup_struct;
-    play_audio_task_setup_struct audio_setup_struct;
+
+    Audio_Task_Setup_Struct play_audio_task_struct = {
+        .i2s_config_ptr  = &i2s_config,
+        .audio_chunk_ptr = &audio_chunk,
+        .wave_file_ptr = &wave_file,
+        .adc_update_struct_ptr = &adc_update_struct,
+    };
     
     BaseType_t play_audio_task_created;
-    TaskHandle_t play_audio_task = NULL;
+    TaskHandle_t play_audio_task_hndl = NULL;
     int play_audio_task_priority = AUDIO_TASK_PRIORITY;
-    play_audio_task_created = xTaskCreate(play_audio_Task, "Play Audio Task", 4096, &audio_setup_struct, play_audio_task_priority, &play_audio_task);
+    play_audio_task_created = xTaskCreate(play_audio_Task, "Play Audio Task", 4096, &play_audio_task_struct, play_audio_task_priority, &play_audio_task_hndl);
     if(play_audio_task_created != pdPASS)
     {
         ESP_LOGE(TAG, "Error creating audio play task!");
         return;
     }
 
-    gptimer_handle_t gptimer = NULL;
-    gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1 * 1000 * 1000, // 1MHz, 1 tick = 1us
-    };
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
-
-    gptimer_alarm_config_t alarm_config = {
-        .reload_count = 0, // counter will reload with 0 on alarm event
-        .alarm_count = 1000000, // period = 1s @resolution 1MHz
-        .flags.auto_reload_on_alarm = true, // enable auto-reload
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
-
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = start_audio_GPTimer_callback, // register user callback
-    };
-
-    Audio_GPTimer_Args_Struct timer_cb_args = {
-        .tx_chan = i2s_config.tx_chan,
-        .Task_To_Notify = play_audio_task,
-    };
-
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &timer_cb_args));
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
-
-    gpio_set_level(XSMT_PIN, 1);
-
     for(int i=0; i<500; i++){
 
-        ESP_ERROR_CHECK(stp_sd__get_new_audio_chunk(&audio_chunk, &wave_file, false));
 
-        if(xSemaphoreTake(adc_update_struct.adc_mutex, portMAX_DELAY) != pdTRUE) ESP_LOGE(TAG, "Error taking adc mutex for volume!");
-        double vol_set_perc = (adc_update_struct.adc_results).vol_percent;
-        ESP_ERROR_CHECK(stp_audio__preload_buffer(&i2s_config, &audio_chunk, vol_set_perc));
-        // gpio_set_level(XSMT_PIN, 1);
-        i2s_channel_enable_from_ISR(i2s_config.tx_chan);
-        i2s_channel_finish_enabling_after_ISR(i2s_config.tx_chan);
-        ESP_ERROR_CHECK(stp_audio__play_audio_chunk(&i2s_config, &audio_chunk, vol_set_perc));
-        vTaskDelay(pdMS_TO_TICKS(250));
-        ESP_ERROR_CHECK(stp_audio__i2s_channel_disable(&i2s_config));
-
-        xSemaphoreGive(adc_update_struct.adc_mutex);
-        // gpio_set_level(XSMT_PIN, 0); 
-        vTaskDelay(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
     if(stp_sd__free_audio_chunk(&audio_chunk) != ESP_OK){
         ESP_LOGE(TAG, "Error destructing audio chunk!");

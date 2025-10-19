@@ -1,5 +1,5 @@
-#ifndef STP_I2S_AUDIO_OPS_H
-#define STP_I2S_AUDIO_OPS_H
+#ifndef STP_AUDIO__AUDIO_OPS_H
+#define STP_AUDIO__AUDIO_OPS_H
 
 #include "stp_sd_sdcardops.h"
 
@@ -27,7 +27,7 @@ typedef struct
 
 typedef struct {
     i2s_chan_handle_t tx_chan;
-    TaskHandle_t Task_To_Notify;
+    QueueHandle_t queue;
 } Audio_GPTimer_Args_Struct;
 
 

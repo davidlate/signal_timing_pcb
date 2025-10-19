@@ -486,11 +486,6 @@ esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk* audio_chunk_ptr, in
         return ESP_FAIL;
     }
 
-    // if(audio_chunk_ptr->data_idx >= audio_chunk_ptr->end_idx)
-    // {
-    //     ESP_LOGE(TAG, "Reading beyond the wave file's endpoint!");
-    // }
-
     return ESP_OK;
 }
 

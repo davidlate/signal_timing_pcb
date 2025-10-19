@@ -1,4 +1,4 @@
-#include "stp_i2s_audio_ops.h"
+#include "stp_audio__audio_ops.h"
 #include "math.h"
 #include "esp_err.h"
 
@@ -318,8 +318,6 @@ esp_err_t stp_audio__preload_buffer(stp_audio__i2s_config* i2s_config_ptr, stp_s
                                     i2s_config_ptr->buf_ptr,
                                     bytes_to_write,
                                     &bytes_written);
-    vTaskDelay(pdMS_TO_TICKS(20));      //I don't know why, but this delay is required.  It can probably be reduced, but not < 10ms for sure.
-
     
     if(ret != ESP_OK){
         ESP_LOGE(TAG, "i2s preload failed!");
