@@ -2,6 +2,8 @@
 #define STP_AUDIO__AUDIO_OPS_H
 
 #include "stp_sd_sdcardops.h"
+#include "driver/gptimer.h"
+
 
 typedef struct
 {
@@ -27,7 +29,8 @@ typedef struct
 
 typedef struct {
     i2s_chan_handle_t tx_chan;
-    QueueHandle_t queue;
+    QueueHandle_t audio_start_queue;
+    gptimer_handle_t rmt_gptimer_hdnl;
 } Audio_GPTimer_Args_Struct;
 
 

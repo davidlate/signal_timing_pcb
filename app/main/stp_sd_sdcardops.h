@@ -83,6 +83,7 @@ typedef struct {
     stp_sd__reload_memory_data_struct* reload_memory_struct_ptr;
 } stp_sd__audio_chunk_setup;
 
+
 typedef struct {
     int              chunk_len_wo_dither;         //length of chunk in number of samples, not including dither
     int              rise_fall_num_samples;       //Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk

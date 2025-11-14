@@ -1,6 +1,8 @@
 #include "stp_audio__audio_ops.h"
 #include "math.h"
 #include "esp_err.h"
+#include "driver/gptimer.h"
+
 
 esp_err_t stp_audio__i2s_channel_setup(stp_audio__i2s_config* i2s_config_ptr)
 {

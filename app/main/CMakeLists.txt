@@ -2,5 +2,5 @@ set(srcs "main.c" "stp_sd_sdcardops.c" "stp_audio__audio_ops.c" "stp_adc.c")
 
 idf_component_register(SRCS ${srcs}
                        INCLUDE_DIRS "."
-                       REQUIRES fatfs sd_card esp_timer esp_driver_i2s bootloader_support esp_adc esp_driver_gptimer esp_driver_ledc
+                       REQUIRES fatfs sd_card esp_timer esp_driver_i2s bootloader_support esp_adc esp_driver_gptimer esp_driver_ledc esp_driver_rmt esp_driver_ledc
                        WHOLE_ARCHIVE)

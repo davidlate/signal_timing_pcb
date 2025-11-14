@@ -78,7 +78,7 @@ esp_err_t stp_adc__read_all_adc_chans(stp_adc__adc_chan_struct* adc_chan_handle_
 
     results_ptr->ch1_percent = (double)adc_raw_result / (double)max_adc_reading * 100.0;
 
-    ESP_ERROR_CHECK(adc_oneshot_read(adc_chan_handle_struct_ptr->vol_adc_handle,
+    ESP_ERROR_CHECK(adc_oneshot_read(adc_chan_handle_struct_ptr->ch2_adc_handle,
                                     adc_chan_handle_struct_ptr->ch2_adc_chan, 
                                     &adc_raw_result));
 
