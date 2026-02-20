@@ -96,11 +96,7 @@ esp_err_t stp_sd__mount_sd_card(stp_sd__spi_config* spi_config_ptr){
 esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     // All done, unmount partition and disable SPI peripheral
     char* TAG = "unmount SD";
-
-    if(esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr)!=ESP_OK){
-        ESP_LOGE(TAG, "Error unmounting SPI Bus!");
-        return ESP_FAIL;
-    }
+    chdir("/");
 
     //deinitialize the bus after all devices are removed
     if(spi_bus_free((spi_config_ptr->host).slot) != ESP_OK){
@@ -111,6 +107,14 @@ esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
         spi_config_ptr->open = false;
         memset(spi_config_ptr, 0, sizeof(*spi_config_ptr)); //Reset all members of wave file to 0;
     }
+
+    esp_err_t ret = esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr);
+    if(ret !=ESP_OK){
+        ESP_LOGE(TAG, "Error unmounting SD Card! Error: %.50s", esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+
+
 
     return ESP_OK;
 }

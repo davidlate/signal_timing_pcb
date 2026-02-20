@@ -49,7 +49,7 @@
 #define XSMT_PIN    GPIO_NUM_7
 #define B1_PIN      GPIO_NUM_35
 #define B2_PIN      GPIO_NUM_17
-#define CH_EN_PIN   GPIO_NUM_21     //H-bridge enable pin
+//#define CH_EN_PIN   GPIO_NUM_21     //H-bridge enable pin
 
 //ADC Pin and channel defines from schematic and https://www.luisllamas.es/en/esp32-s3-hardware-details-pinout/
 //See example https://github.com/espressif/esp-idf/blob/v4.4/examples/peripherals/adc/single_read/single_read/main/single_read.c
@@ -74,16 +74,16 @@
 #define CH1_CURSET_CHANNEL LEDC_CHANNEL_0
 #define CH1_CURSET_TIMER LEDC_TIMER_0
 #define CH1_CURSET_MODE LEDC_LOW_SPEED_MODE
-#define CH1_CURSET_DUTY_RES LEDC_TIMER_4_BIT 
-#define CH1_CURSET_FREQUENCY 2e6             // 1 kHz PWM frequency
+#define CH1_CURSET_DUTY_RES LEDC_TIMER_8_BIT 
+#define CH1_CURSET_FREQUENCY 200000             // 1 kHz PWM frequency
 
 #define CH2_CURSET_PIN  GPIO_NUM_47
 
 //ENDQUOTE
 
 //RMT Pin defines
-#define CH1_SW_OUTA_PIN     GPIO_NUM_9  //CH1_SW_OUT+
-#define CH1_SW_OUTB_PIN     GPIO_NUM_8  //CH1_SW_OUT-
+#define CH1_SW_OUTA_PIN     GPIO_NUM_8  //CH1_SW_OUT+   //TODO: This should be pin 9
+#define CH1_SW_OUTB_PIN     GPIO_NUM_21  //CH1_SW_OUT-   //   Using the ch_en pin of GPIO21, GPIO9 is burnt out
 #define CH2_SW_OUTA_PIN     GPIO_NUM_36 //CH2_SW_OUT+
 #define CH2_SW_OUTB_PIN     GPIO_NUM_37 //CH2_SW_OUT-
 
@@ -103,7 +103,7 @@
 #define PCM5102A_LATENCY_COMPENSATION_US    4975                    
 #define PRE_DITHER_MS                       0
 
-#define RMT_PLAY_DELAY_MS                       0.100+PCM5102A_LATENCY_COMPENSATION_US/1000
+#define RMT_PLAY_DELAY_MS                       10+PCM5102A_LATENCY_COMPENSATION_US/1000
 
 #define ADC_UPDATE_PERIOD_MS    100
 #define PRINT_UPDATE_PERIOD_MS  100
@@ -139,6 +139,10 @@ void flash_lights(void * pvParameters){
     gpio_set_level(LED2_PIN, 0);
     gpio_set_level(XSMT_PIN, 0);
 
+    gpio_set_direction(LED2_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED1_PIN, 0);
+
+
     while(true){
         gpio_set_level(LED1_PIN, 1);
         gpio_set_level(LED2_PIN, 0);
@@ -156,8 +160,8 @@ void update_adc(void* pvParameters){
     stp_adc__adc_setup_struct adc_chan_setup = {
         .vol_adc_unit  = VOL_ADC_UNIT,
         .vol_adc_chan  = VOL_ADC_CHAN,
-        .ch1_adc_unit  = CH1_ADC_UNIT,
-        .ch1_adc_chan  = CH1_ADC_CHAN,
+        .ch1_adc_unit  = CH2_ADC_UNIT,  //TODO fix
+        .ch1_adc_chan  = CH2_ADC_CHAN,  //TODO fix
         .ch2_adc_unit  = CH2_ADC_UNIT,
         .ch2_adc_chan  = CH2_ADC_CHAN,
         .batt_adc_unit = BATT_ADC_UNIT,
@@ -189,17 +193,19 @@ void update_adc(void* pvParameters){
     ledc_channel_config(&ledc_channel);
     //ENDQUOTE
     int ch1_duty = 0;
-    int ch1_duty_bits = pow(2, 4)-1;
-
+    int ch1_duty_bits = pow(2, CH1_CURSET_DUTY_RES)-1;
+    double ch1_percent = 0;
     while (true)
     {
         if(xSemaphoreTake(adc_update_struct->adc_mutex, portMAX_DELAY)==pdTRUE)
         {
             stp_adc__read_all_adc_chans(&adc_chan_struct, &(adc_update_struct->adc_results));
-            ch1_duty = adc_update_struct->adc_results.ch1_percent/100*(ch1_duty_bits);
+            ch1_percent = adc_update_struct->adc_results.ch1_percent;
+            xSemaphoreGive(adc_update_struct->adc_mutex);
+            // if(ch1_percent < 40) ch1_percent = 40;
+            ch1_duty = ch1_percent/100*(ch1_duty_bits);
             ledc_set_duty(CH1_CURSET_MODE, CH1_CURSET_CHANNEL, ch1_duty);
             ledc_update_duty(CH1_CURSET_MODE, CH1_CURSET_CHANNEL);
-            xSemaphoreGive(adc_update_struct->adc_mutex);
             vTaskDelay(pdMS_TO_TICKS(ADC_UPDATE_PERIOD_MS));
         }
     }
@@ -308,8 +314,8 @@ void play_audio_Task(void* pvParameters)
 
     gpio_set_level(XSMT_PIN, 1);
 
-    while (true)
-    {
+    // while (true)
+    // {
         bool use_random = false;
         ESP_ERROR_CHECK(stp_sd__get_new_audio_chunk(audio_chunk_ptr, wave_file_ptr, use_random));
 
@@ -330,7 +336,9 @@ void play_audio_Task(void* pvParameters)
         else{
             ESP_LOGE(TAG, "Play queue failure!\n\n");
         }
-    }
+    // }
+    printf("Exiting Audio Task\n");
+    vTaskDelete(NULL);
 }
 
 
@@ -347,8 +355,6 @@ void run_rmt_Task(void* pvParameters)
 {
     char* TAG = "run_rmt_Task";
     
-    QueueHandle_t rmt_start_queue = *((QueueHandle_t*)pvParameters);
-
     rmt_channel_handle_t ch1_phaseA_rmt_chan = NULL;
     rmt_tx_channel_config_t ch1_phaseA_rmt_chan_config = {
                                                         .clk_src = RMT_CLK_SRC_DEFAULT,   // select source clock
@@ -361,64 +367,118 @@ void run_rmt_Task(void* pvParameters)
                                                         };
     ESP_ERROR_CHECK(rmt_new_tx_channel(&ch1_phaseA_rmt_chan_config, &ch1_phaseA_rmt_chan));
 
-    rmt_copy_encoder_config_t copy_encoder_cfg = {};
-    rmt_encoder_handle_t copy_encoder = NULL;
-    ESP_ERROR_CHECK(rmt_new_copy_encoder(&copy_encoder_cfg, &copy_encoder)); // copies symbols as-is
+    rmt_copy_encoder_config_t ch1_pha_copy_encoder_cfg = {};
+    rmt_encoder_handle_t ch1_pha_copy_encoder = NULL;
+    ESP_ERROR_CHECK(rmt_new_copy_encoder(&ch1_pha_copy_encoder_cfg, &ch1_pha_copy_encoder)); // copies symbols as-is
 
-    rmt_symbol_word_t symbols[] = {
+    rmt_symbol_word_t channel1_pha_symbols[] = {
         {
-            .level0 = 1, .duration0 = 150,   
-            .level1 = 0, .duration1 = 40,
+            .level0 = 0, .duration0 = 1,   
+            .level1 = 0, .duration1 = 2,
         },
         {
             .level0 = 1, .duration0 = 150,   
-            .level1 = 0, .duration1 = 20,
+            .level1 = 0, .duration1 = 150,
         },
-        // {
-        //     .level0 = 1, .duration0 = 150,   
-        //     .level1 = 0, .duration1 = 150,
-        // },
-        // {
-        //     .level0 = 1, .duration0 = 150,   
-        //     .level1 = 0, .duration1 = 150,
-        // },
-        // {
-        //     .level0 = 1, .duration0 = 150,   
-        //     .level1 = 0, .duration1 = 150,
-        // },
-        // {
-        //     .level0 = 1, .duration0 = 150,   
-        //     .level1 = 0, .duration1 = 150,
-        // },
+        {
+            .level0 = 0, .duration0 = 350,   
+            .level1 = 0, .duration1 = 350,
+        },
+        {
+            .level0 = 1, .duration0 = 150,   
+            .level1 = 0, .duration1 = 150,
+        },
+        {
+            .level0 = 0, .duration0 = 350,   
+            .level1 = 0, .duration1 = 350,
+        },
+        {
+            .level0 = 1, .duration0 = 150,   
+            .level1 = 0, .duration1 = 150,
+        },
     };
 
-    // ESP_ERROR_CHECK(rmt_enable(ch1_phaseA_rmt_chan));
+    rmt_channel_handle_t ch1_phaseB_rmt_chan = NULL;
+    rmt_tx_channel_config_t ch1_phaseB_rmt_chan_config = {
+                                                        .clk_src = RMT_CLK_SRC_DEFAULT,   // select source clock
+                                                        .gpio_num = CH1_SW_OUTB_PIN,                    // GPIO number
+                                                        .mem_block_symbols = 64,          // memory block size, 64 * 4 = 256 Bytes
+                                                        .resolution_hz = 1e6,             // 1 MHz tick resolution, i.e., 1 tick = 1 µs
+                                                        .trans_queue_depth = 4,           // set the number of transactions that can pend in the background
+                                                        .flags.invert_out = false,        // do not invert output signal
+                                                        .flags.with_dma = false,          // do not need DMA backend
+                                                        };
+    ESP_ERROR_CHECK(rmt_new_tx_channel(&ch1_phaseB_rmt_chan_config, &ch1_phaseB_rmt_chan));
 
-    rmt_transmit_config_t tx_config = {
+    rmt_copy_encoder_config_t ch1_phb_copy_encoder_cfg = {};
+    rmt_encoder_handle_t ch1_phb_copy_encoder = NULL;
+    ESP_ERROR_CHECK(rmt_new_copy_encoder(&ch1_phb_copy_encoder_cfg, &ch1_phb_copy_encoder)); // copies symbols as-is
+
+    rmt_symbol_word_t channel1_phb_symbols[] = {
+        {
+            .level0 = 0, .duration0 = 150,   
+            .level1 = 1, .duration1 = 150,
+        },
+        {
+            .level0 = 0, .duration0 = 350,   
+            .level1 = 0, .duration1 = 350,
+        },
+        {
+            .level0 = 0, .duration0 = 150,   
+            .level1 = 1, .duration1 = 150,
+        },
+        {
+            .level0 = 0, .duration0 = 350,   
+            .level1 = 0, .duration1 = 350,
+        },
+        {
+            .level0 = 0, .duration0 = 150,   
+            .level1 = 1, .duration1 = 150,
+        },
+    };
+
+
+    rmt_transmit_config_t tx_config_ch1A = {
+        .loop_count = 0, // no transfer loop
+    };
+
+    rmt_transmit_config_t tx_config_ch1B = {
         .loop_count = 0, // no transfer loop
     };
 
 
     size_t sizeof_rmt_preload_struct = stp__rmt_get_size_of_rmt_preload_struct();
-    stp__rmt_preload_struct *rmt_preload_struct_ptr = malloc(sizeof_rmt_preload_struct);
-    if(rmt_preload_struct_ptr == NULL) ESP_LOGE(TAG, "Error allocating memory for RMT prelaod struct!");
-    memset(rmt_preload_struct_ptr, 0, sizeof_rmt_preload_struct);
+    stp__rmt_preload_struct *rmt_preload_struct_ch1_pha_ptr = malloc(sizeof_rmt_preload_struct);
+    if(rmt_preload_struct_ch1_pha_ptr == NULL) ESP_LOGE(TAG, "Error allocating memory for RMT preload struct ch1 phA!");
+    memset(rmt_preload_struct_ch1_pha_ptr, 0, sizeof_rmt_preload_struct);
+
+    stp__rmt_preload_struct *rmt_preload_struct_ch1_phb_ptr = malloc(sizeof_rmt_preload_struct);
+    if(rmt_preload_struct_ch1_phb_ptr == NULL) ESP_LOGE(TAG, "Error allocating memory for RMT preload struct ch1 phB!");
+    memset(rmt_preload_struct_ch1_phb_ptr, 0, sizeof_rmt_preload_struct);
 
     while(true)
     {
         ESP_ERROR_CHECK(rmt_enable(ch1_phaseA_rmt_chan));
-        stp__rmt_transmit_preload(ch1_phaseA_rmt_chan, copy_encoder, symbols, sizeof(symbols), &tx_config, rmt_preload_struct_ptr);
+        stp__rmt_transmit_preload(ch1_phaseA_rmt_chan, ch1_pha_copy_encoder, channel1_pha_symbols, sizeof(channel1_pha_symbols), &tx_config_ch1A, rmt_preload_struct_ch1_pha_ptr);
+
+        ESP_ERROR_CHECK(rmt_enable(ch1_phaseB_rmt_chan));
+        stp__rmt_transmit_preload(ch1_phaseB_rmt_chan, ch1_phb_copy_encoder, channel1_phb_symbols, sizeof(channel1_phb_symbols), &tx_config_ch1B, rmt_preload_struct_ch1_phb_ptr);
 
         if(xTaskNotifyWait(ULONG_MAX, ULONG_MAX, NULL, pdMS_TO_TICKS(10000)) == pdTRUE)
         {
-            stp__rmt_do_transaction(rmt_preload_struct_ptr);
+            stp__rmt_do_transaction(rmt_preload_struct_ch1_pha_ptr);         //There is an issue with the rmt_do_transaction function.  Seemingly it doesn't have a good handle on which channel to turn on
+            stp__rmt_do_transaction(rmt_preload_struct_ch1_phb_ptr);
             vTaskDelay(pdMS_TO_TICKS(150));
             ESP_ERROR_CHECK(rmt_disable(ch1_phaseA_rmt_chan));
+            ESP_ERROR_CHECK(rmt_disable(ch1_phaseB_rmt_chan));
+
         }
         else
         {
             ESP_LOGE(TAG, "RMT do transaction didn't work!");
             ESP_ERROR_CHECK(rmt_disable(ch1_phaseA_rmt_chan));
+            ESP_ERROR_CHECK(rmt_disable(ch1_phaseB_rmt_chan));
+
         }
     }
 }
@@ -429,6 +489,11 @@ void app_main(void)
     char* TAG = "main";
 
     printf("\33[?25l"); //Hide terminal cursor, quoted from https://stackoverflow.com/questions/30126490/how-to-hide-console-cursor-in-c;
+
+    // gpio_set_direction(CH1_SW_OUTB_PIN, GPIO_MODE_OUTPUT);
+    // gpio_set_level(CH1_SW_OUTB_PIN, 1);
+    // gpio_set_direction(CH1_SW_OUTA_PIN, GPIO_MODE_OUTPUT);
+    // gpio_set_level(CH1_SW_OUTA_PIN, 0);
 
     stp_sd__spi_config spi_config = {
         .open        = false,
@@ -585,21 +650,15 @@ void app_main(void)
         return;
     }
 
-    gpio_set_direction(CH_EN_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(CH_EN_PIN, 1);
-
     
     
-    for(int i=0; i<500; i++)
+    for(int i=0; i<20; i++)
     { 
 
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    // free(rmt_preload_struct_ptr);
-
     esp_err_t stp_audio__i2s_channel_disable(stp_audio__i2s_config* i2s_config_ptr);
-
 
     if(stp_sd__free_audio_chunk(&audio_chunk) != ESP_OK){
         ESP_LOGE(TAG, "Error destructing audio chunk!");
@@ -612,6 +671,12 @@ void app_main(void)
     if(stp_sd__unmount_sd_card(&spi_config) != ESP_OK){
         ESP_LOGE(TAG, "Error unmounting SD card");
         return;
+    }
+
+        for(int i=0; i<800; i++)
+    { 
+
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 
     return;
