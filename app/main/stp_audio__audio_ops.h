@@ -4,20 +4,23 @@
 #include "stp_sd_sdcardops.h"
 #include "driver/gptimer.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct
 {
     i2s_chan_handle_t    tx_chan;                           //Channel handle for current I2S channel
     int32_t*             buf_ptr;
-    int buf_capacity;
-    int buf_len;
-    int num_dma_buf;
-    int size_dma_buf;
+    size_t buf_capacity;
+    size_t buf_len;
+    size_t num_dma_buf;
+    size_t size_dma_buf;
     int ms_delay_between_writes;
     int bclk_pin;
     int ws_pin;
     int dout_pin;
-    int sample_rate_Hz;
+    uint32_t sample_rate_Hz;
     double max_vol_dBFS;
     double min_vol_dBFS;
     double set_vol_percent;
@@ -45,5 +48,9 @@ esp_err_t stp_audio__preload_buffer(stp_audio__i2s_config* i2s_config_ptr, stp_s
 esp_err_t stp_audio__i2s_channel_enable(stp_audio__i2s_config* i2s_config_ptr);
 
 esp_err_t stp_audio__i2s_channel_disable(stp_audio__i2s_config* i2s_config_ptr);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

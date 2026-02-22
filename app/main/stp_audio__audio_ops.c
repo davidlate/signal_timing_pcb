@@ -19,7 +19,7 @@ esp_err_t stp_audio__i2s_channel_setup(stp_audio__i2s_config* i2s_config_ptr)
         return ESP_FAIL;
     }
     //TODO check out 4
-    int write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * 2;
+    size_t write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * 2;
 
     i2s_config_ptr->buf_len = write_buffer_size_bytes / sizeof(int32_t);
 
@@ -112,7 +112,7 @@ esp_err_t stp_i2s__set_vol_scale_factor(stp_audio__i2s_config* i2s_config_ptr, d
         i2s_config_ptr->actual_dbFS = -999;
     }
     return ESP_OK;
-};
+}
 
 esp_err_t stp_audio__i2s_channel_enable(stp_audio__i2s_config* i2s_config_ptr){
     char* TAG = "i2s_enable";
@@ -121,7 +121,7 @@ esp_err_t stp_audio__i2s_channel_enable(stp_audio__i2s_config* i2s_config_ptr){
         return ESP_FAIL;
     }
     return ESP_OK;
-};
+}
 
 esp_err_t stp_audio__i2s_channel_disable(stp_audio__i2s_config* i2s_config_ptr){
     char* TAG = "i2s_enable";
@@ -130,7 +130,7 @@ esp_err_t stp_audio__i2s_channel_disable(stp_audio__i2s_config* i2s_config_ptr){
         return ESP_FAIL;
     }
     return ESP_OK;
-};
+}
 
 
 esp_err_t stp_audio__play_audio_chunk(stp_audio__i2s_config* i2s_config_ptr, stp_sd__audio_chunk* audio_chunk_ptr, double set_vol_perc){
@@ -169,8 +169,8 @@ esp_err_t stp_audio__play_audio_chunk(stp_audio__i2s_config* i2s_config_ptr, stp
     //TODO keep going here
     while(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)
     {
-        int buf_pos = 0;
-        int chunk_samples_loaded = 0;
+        size_t buf_pos = 0;
+        size_t chunk_samples_loaded = 0;
 
         for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++)
         {
@@ -265,7 +265,7 @@ esp_err_t stp_audio__preload_buffer(stp_audio__i2s_config* i2s_config_ptr, stp_s
     audio_chunk_ptr->chunk_data_pos = 0;
     audio_chunk_ptr->memory_buffer_pos = 0;
     audio_chunk_ptr->data_idx = audio_chunk_ptr->start_idx;
-    stp_sd__wavFile* wave_file_ptr = audio_chunk_ptr->wavFile_ptr;
+    // stp_sd__wavFile* wave_file_ptr = audio_chunk_ptr->wavFile_ptr;
 
     if(stp_i2s__set_vol_scale_factor(i2s_config_ptr, set_vol_perc) != ESP_OK){
         ESP_LOGE(TAG, "Error setting volume!");
@@ -284,8 +284,9 @@ esp_err_t stp_audio__preload_buffer(stp_audio__i2s_config* i2s_config_ptr, stp_s
     
     if(xQueueSend(audio_chunk_ptr->reload_audio_buff_Queue, reload_memory_struct_ptr, 0) != pdTRUE) ESP_LOGE(TAG, "Failed to send to Queue!");
 
-    int buf_pos = 0;
-    int chunk_samples_loaded = 0;
+    size_t buf_pos = 0;
+    size_t chunk_samples_loaded = 0;
+    
     for(buf_pos = 0; buf_pos < i2s_config_ptr->buf_len; buf_pos++)
     {
         if(audio_chunk_ptr->chunk_data_pos < audio_chunk_ptr->chunk_len_inc_dither)

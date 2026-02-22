@@ -139,8 +139,8 @@ esp_err_t stp_sd__open_audio_file(stp_sd__wavFile* wave_file_ptr)
         ESP_LOGI(TAG, "File Opened Successfully!");
     }
 
-    int count = 0;
-    int num_objs_to_read= 4;
+    size_t count = 0;
+    size_t num_objs_to_read= 4;
     //read RIFF data
 	count = fread(wave_file_ptr->RIFF, sizeof(*(wave_file_ptr->RIFF)), num_objs_to_read, wave_file_ptr->fp);
 	ESP_LOGI(TAG, "RIFF: %.*s", (int)sizeof(*(wave_file_ptr->RIFF))*num_objs_to_read, wave_file_ptr->RIFF);
@@ -230,14 +230,14 @@ esp_err_t stp_sd__open_audio_file(stp_sd__wavFile* wave_file_ptr)
     //read data size
     num_objs_to_read = 1;
     count = fread(&(wave_file_ptr->data_size), sizeof(wave_file_ptr->data_size), num_objs_to_read, wave_file_ptr->fp);
-    ESP_LOGI(TAG, "Data Size: %li bytes", wave_file_ptr->data_size);
+    ESP_LOGI(TAG, "Data Size: %zu bytes", wave_file_ptr->data_size);
 
     //Get location in file where audio data starts, in number of bytes from beginning of file (this works because we open the file in binary mode)
     wave_file_ptr->audiofile_data_start_pos = ftell(wave_file_ptr->fp);
     ESP_LOGI(TAG, "Audio Data Start position: %li bytes", wave_file_ptr->audiofile_data_start_pos);
 
     //Calculate location in file of final audio data point, in number of bytes from the beginning of the file
-    wave_file_ptr->audiofile_data_end_pos = wave_file_ptr->audiofile_data_start_pos + (wave_file_ptr->data_size) - 1;
+    wave_file_ptr->audiofile_data_end_pos = wave_file_ptr->audiofile_data_start_pos + (long)(wave_file_ptr->data_size) - 1;
     wave_file_ptr->audio_len = wave_file_ptr->data_size / sizeof(int32_t);
     ESP_LOGI(TAG, "Audio Data End position: %li bytes", wave_file_ptr->audiofile_data_end_pos);
 
@@ -292,12 +292,12 @@ esp_err_t stp_sd__open_audio_file(stp_sd__wavFile* wave_file_ptr)
 esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_ptr, stp_sd__audio_chunk* audio_chunk_ptr){
     char* TAG = "audio_chunk_ptr_const";
 
-    int A_idx = 0;
-    int B_idx = A_idx + audio_chunk_setup_ptr->pre_dither_num_samples;
-    int C_idx = B_idx + audio_chunk_setup_ptr->rise_fall_num_samples;
-    int D_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither - audio_chunk_setup_ptr->rise_fall_num_samples;
-    int E_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither;
-    int F_idx = E_idx + audio_chunk_setup_ptr->post_dither_num_samples;
+    size_t A_idx = 0;
+    size_t B_idx = A_idx + audio_chunk_setup_ptr->pre_dither_num_samples;
+    size_t C_idx = B_idx + audio_chunk_setup_ptr->rise_fall_num_samples;
+    size_t D_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither - audio_chunk_setup_ptr->rise_fall_num_samples;
+    size_t E_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither;
+    size_t F_idx = E_idx + audio_chunk_setup_ptr->post_dither_num_samples;
     
     stp_sd__wavFile* wave_file_ptr = audio_chunk_setup_ptr->wavFile_ptr;
     // printf("A_idx: %i | B_idx: %i | C_idx: %i | D_idx: %i | E_idx: %i | F_idx: %i", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
@@ -316,9 +316,9 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
     audio_chunk_ptr->reload_memory_struct_ptr = audio_chunk_setup_ptr->reload_memory_struct_ptr;
 
     /*Get locations of the start- and end- idxs of the allowable space where we can take our audio file from, in no. of bytes from beginning of file, that we can grab our chunk from.*/
-    long int start_file_pos_samples = ((wave_file_ptr->audiofile_data_start_pos)/sizeof(int32_t)) + audio_chunk_ptr->padding_num_samples;
-    long int end_file_pos_samples   = ((wave_file_ptr->audiofile_data_end_pos)/sizeof(int32_t))   - audio_chunk_ptr->padding_num_samples - audio_chunk_ptr->chunk_len_wo_dither;
-    long int delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
+    unsigned long start_file_pos_samples = ((wave_file_ptr->audiofile_data_start_pos)/(long)(sizeof(int32_t))) + audio_chunk_ptr->padding_num_samples;
+    unsigned long end_file_pos_samples   = ((wave_file_ptr->audiofile_data_end_pos)/(long)(sizeof(int32_t)))   - audio_chunk_ptr->padding_num_samples - audio_chunk_ptr->chunk_len_wo_dither;
+    unsigned long delta_file_pos_samples = end_file_pos_samples - start_file_pos_samples;
 
     if (delta_file_pos_samples < audio_chunk_ptr->chunk_size)
     {
@@ -349,8 +349,8 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
             assert(audio_chunk_ptr->cos_ramp_LUT_ptr);
             for(int i=0; i<audio_chunk_ptr->rise_fall_num_samples; i++)
             {
-                float rise_frac    = (float)1 - ((float)i / (float)(audio_chunk_ptr->rise_fall_num_samples));
-                float cos_ramp     = ((float)1 + cos(rise_frac * M_PI))/2;
+                double rise_frac    = 1.0F - ((float)i / (float)(audio_chunk_ptr->rise_fall_num_samples));
+                double cos_ramp     = (1.0F + cos(rise_frac * M_PI))/2;
                 audio_chunk_ptr->cos_ramp_LUT_ptr[i] = cos_ramp;
             }
         }

@@ -5,7 +5,6 @@
 //This program is written by David Earley (2025) 
 //This program borrows heavily from this article and the Espressif examples throughout:
 //https://truelogic.org/wordpress/2015/09/04/parsing-a-wav-file-in-c/
-
 #include <string.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
@@ -29,9 +28,12 @@
 #include "driver/gptimer.h"
 #include <driver/ledc.h>
 
+
 #include "stp_sd_sdcardops.h"
 #include "stp_audio__audio_ops.h"
 #include "stp_adc.h"
+
+
 
 
 //SD Card operation defines
@@ -44,10 +46,11 @@
 #define PIN_NUM_CS    GPIO_NUM_10   //CS
 
 //General IO defines
-#define LED1_PIN    48          //GPIO enums only go up to 38
+#define LED1_PIN    (gpio_num_t)48          //GPIO enums only go up to 38
 #define LED2_PIN    GPIO_NUM_38
 #define XSMT_PIN    GPIO_NUM_7
 #define B1_PIN      GPIO_NUM_35
+
 #define B2_PIN      GPIO_NUM_17
 //#define CH_EN_PIN   GPIO_NUM_21     //H-bridge enable pin
 
@@ -175,26 +178,34 @@ void update_adc(void* pvParameters){
 
     //QUOTE: https://randomnerdtutorials.com/esp-idf-esp32-gpio-pwm-ledc/
     ledc_timer_config_t ledc_timer = {
-        .speed_mode = CH1_CURSET_MODE,
-        .duty_resolution = CH1_CURSET_DUTY_RES,
-        .timer_num = CH1_CURSET_TIMER,
-        .freq_hz = CH1_CURSET_FREQUENCY
+        .speed_mode = (ledc_mode_t)CH1_CURSET_MODE,
+        .duty_resolution = (ledc_timer_bit_t)CH1_CURSET_DUTY_RES,
+        .timer_num = (ledc_timer_t)CH1_CURSET_TIMER,
+        .freq_hz = (uint32_t)CH1_CURSET_FREQUENCY,
+        .clk_cfg = (ledc_clk_cfg_t)LEDC_USE_RC_FAST_CLK,
+        .deconfigure = (bool)0,
     };
     ledc_timer_config(&ledc_timer);
 
     // Configure LEDC channel
     ledc_channel_config_t ledc_channel = {
         .gpio_num = CH1_CURSET_PIN,
-        .speed_mode = CH1_CURSET_MODE,
-        .channel = CH1_CURSET_CHANNEL,
-        .timer_sel = CH1_CURSET_TIMER,
-        .duty = 0
+        .speed_mode = (ledc_mode_t)CH1_CURSET_MODE,
+        .channel = (ledc_channel_t)CH1_CURSET_CHANNEL,
+        .intr_type = (ledc_intr_type_t)LEDC_INTR_DISABLE,
+        .timer_sel = (ledc_timer_t)CH1_CURSET_TIMER,
+        .duty = (uint32_t)0,
+        .hpoint = 0,
+        .sleep_mode = (ledc_sleep_mode_t)LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
+        .flags = {
+            .output_invert = (unsigned int)0
+        },
     };
     ledc_channel_config(&ledc_channel);
     //ENDQUOTE
-    int ch1_duty = 0;
-    int ch1_duty_bits = pow(2, CH1_CURSET_DUTY_RES)-1;
-    double ch1_percent = 0;
+    uint32_t ch1_duty = 0;
+    int ch1_duty_bits = pow(2, (unsigned int)CH1_CURSET_DUTY_RES)-1;
+    float ch1_percent = 0;
     while (true)
     {
         if(xSemaphoreTake(adc_update_struct->adc_mutex, portMAX_DELAY)==pdTRUE)
@@ -203,7 +214,7 @@ void update_adc(void* pvParameters){
             ch1_percent = adc_update_struct->adc_results.ch1_percent;
             xSemaphoreGive(adc_update_struct->adc_mutex);
             // if(ch1_percent < 40) ch1_percent = 40;
-            ch1_duty = ch1_percent/100*(ch1_duty_bits);
+            ch1_duty = (uint32_t)(ch1_percent/100.0F*(float)(ch1_duty_bits));
             ledc_set_duty(CH1_CURSET_MODE, CH1_CURSET_CHANNEL, ch1_duty);
             ledc_update_duty(CH1_CURSET_MODE, CH1_CURSET_CHANNEL);
             vTaskDelay(pdMS_TO_TICKS(ADC_UPDATE_PERIOD_MS));
@@ -223,11 +234,11 @@ void print_to_terminal(void* pvParameters){
             xSemaphoreGive(adc_update_struct->adc_mutex);
 
             printf("\rVol: %.0f%% | Ch2: %0.0f%% | Ch1: %0.0f%% |Batt: %.1fV | HV: %.1fV  ",
-                adc_results.vol_percent,
-                adc_results.ch2_percent,
-                adc_results.ch1_percent,
-                adc_results.batt_voltage,
-                adc_results.hv_voltage);
+                (double)adc_results.vol_percent,
+                (double)adc_results.ch2_percent,
+                (double)adc_results.ch1_percent,
+                (double)adc_results.batt_voltage,
+                (double)adc_results.hv_voltage);
         }
         vTaskDelay(pdMS_TO_TICKS(PRINT_UPDATE_PERIOD_MS));
     }
@@ -248,7 +259,7 @@ static bool IRAM_ATTR start_audio_GPTimer_callback(gptimer_handle_t timer, const
 
 void play_audio_Task(void* pvParameters)
 {
-    char* TAG = "play_audio_task";
+    const char* TAG = "play_audio_task";
     Audio_Task_Setup_Struct* task_setup_struct_ptr = (Audio_Task_Setup_Struct*)pvParameters;
     stp_audio__i2s_config* i2s_config_ptr       = task_setup_struct_ptr->i2s_config_ptr;
     stp_sd__audio_chunk* audio_chunk_ptr        = task_setup_struct_ptr->audio_chunk_ptr;
@@ -259,13 +270,22 @@ void play_audio_Task(void* pvParameters)
     gptimer_config_t timer_config = {
                                     .clk_src = GPTIMER_CLK_SRC_DEFAULT,
                                     .direction = GPTIMER_COUNT_UP,
-                                    .resolution_hz = 1e6, // 1MHz, 1 tick = 1us
+                                    .resolution_hz = 1000000, // 1MHz, 1 tick = 1us
+                                    .intr_priority = 0,        //TODO check and increase this later,
+                                    .flags = {
+                                        .intr_shared = 1,
+                                        .allow_pd = 0,
+                                        .backup_before_sleep = 0,
+                                    },
                                 };
+
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &audio_gptimer_hndl));
     gptimer_alarm_config_t alarm_config = {
-                                        .reload_count = 0, // counter will reload with 0 on alarm event
                                         .alarm_count = AUDIO_PLAY_INTERVAL_MS * 1000,
-                                        .flags.auto_reload_on_alarm = true, // enable auto-reload
+                                        .reload_count = 0, // counter will reload with 0 on alarm event
+                                        .flags = {
+                                            .auto_reload_on_alarm = true, // enable auto-reload
+                                        }
                                     };
     ESP_ERROR_CHECK(gptimer_set_alarm_action(audio_gptimer_hndl, &alarm_config));
     gptimer_event_callbacks_t cbs = {
@@ -278,17 +298,25 @@ void play_audio_Task(void* pvParameters)
 
     gptimer_handle_t rmt_gptimer = NULL;
     gptimer_config_t rmt_timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT, // Select the default clock source
-        .direction = GPTIMER_COUNT_UP,      // Counting direction is up
-        .resolution_hz = 1e6,   // Resolution is 1 MHz, i.e., 1 tick equals 1 microsecond
+        .clk_src = (gptimer_clock_source_t)GPTIMER_CLK_SRC_DEFAULT, // Select the default clock source
+        .direction = (gptimer_count_direction_t)GPTIMER_COUNT_UP,      // Counting direction is up
+        .resolution_hz = 100000,   // Resolution is 1 MHz, i.e., 1 tick equals 1 microsecond
+        .intr_priority = 0,         //TODO: change this later
+        .flags = {
+            .intr_shared = 1,
+            .allow_pd = 0,
+            .backup_before_sleep = 0,
+        }
     };
     // Create a timer instance
     ESP_ERROR_CHECK(gptimer_new_timer(&rmt_timer_config, &rmt_gptimer));
 
     gptimer_alarm_config_t rmt_alarm_config = {
-                                            .reload_count = 0, // counter will reload with 0 on alarm event
                                             .alarm_count = RMT_PLAY_DELAY_MS * 1000, // Set the actual alarm period, since the resolution is 1us, 1000000 represents 1s
-                                            .flags.auto_reload_on_alarm = true, // Disable auto-reload function
+                                            .reload_count = 0, // counter will reload with 0 on alarm event
+                                            .flags = {
+                                                .auto_reload_on_alarm = true, // Disable auto-reload function
+                                            }
                                         };
 
     ESP_ERROR_CHECK(gptimer_set_alarm_action(rmt_gptimer, &rmt_alarm_config));
@@ -314,8 +342,8 @@ void play_audio_Task(void* pvParameters)
 
     gpio_set_level(XSMT_PIN, 1);
 
-    // while (true)
-    // {
+    while (true)
+    {
         bool use_random = false;
         ESP_ERROR_CHECK(stp_sd__get_new_audio_chunk(audio_chunk_ptr, wave_file_ptr, use_random));
 
@@ -336,7 +364,7 @@ void play_audio_Task(void* pvParameters)
         else{
             ESP_LOGE(TAG, "Play queue failure!\n\n");
         }
-    // }
+    }
     printf("Exiting Audio Task\n");
     vTaskDelete(NULL);
 }
@@ -353,18 +381,24 @@ static bool IRAM_ATTR start_RMT_output_gptimer_cb(gptimer_handle_t timer, const 
 
 void run_rmt_Task(void* pvParameters)
 {
-    char* TAG = "run_rmt_Task";
+    const char* TAG = "run_rmt_Task";
     
     rmt_channel_handle_t ch1_phaseA_rmt_chan = NULL;
     rmt_tx_channel_config_t ch1_phaseA_rmt_chan_config = {
-                                                        .clk_src = RMT_CLK_SRC_DEFAULT,   // select source clock
                                                         .gpio_num = CH1_SW_OUTA_PIN,                    // GPIO number
+                                                        .clk_src = RMT_CLK_SRC_DEFAULT,   // select source clock
+                                                        .resolution_hz = 1000000,             // 1 MHz tick resolution, i.e., 1 tick = 1 µs
                                                         .mem_block_symbols = 64,          // memory block size, 64 * 4 = 256 Bytes
-                                                        .resolution_hz = 1e6,             // 1 MHz tick resolution, i.e., 1 tick = 1 µs
                                                         .trans_queue_depth = 4,           // set the number of transactions that can pend in the background
-                                                        .flags.invert_out = false,        // do not invert output signal
-                                                        .flags.with_dma = false,          // do not need DMA backend
+                                                        .flags = {
+                                                            .invert_out = false,        // do not invert output signal
+                                                            .with_dma = false,          // do not need DMA backend
+                                                            .io_loop_back = 0,
+                                                            .io_od_mode = 0,
+                                                            .allow_pd = 0
+                                                            }
                                                         };
+
     ESP_ERROR_CHECK(rmt_new_tx_channel(&ch1_phaseA_rmt_chan_config, &ch1_phaseA_rmt_chan));
 
     rmt_copy_encoder_config_t ch1_pha_copy_encoder_cfg = {};
@@ -373,41 +407,47 @@ void run_rmt_Task(void* pvParameters)
 
     rmt_symbol_word_t channel1_pha_symbols[] = {
         {
-            .level0 = 0, .duration0 = 1,   
-            .level1 = 0, .duration1 = 2,
+            {.duration0 = 1, .level0 = 0,  
+            .duration1 = 2, .level1 = 0, }
         },
         {
-            .level0 = 1, .duration0 = 150,   
-            .level1 = 0, .duration1 = 150,
+            {.duration0 = 150, .level0 = 1,    
+            .duration1 = 150, .level1 = 0, }
         },
         {
-            .level0 = 0, .duration0 = 350,   
-            .level1 = 0, .duration1 = 350,
+            {.duration0 = 350, .level0 = 0,    
+            .duration1 = 350, .level1 = 0, }
         },
         {
-            .level0 = 1, .duration0 = 150,   
-            .level1 = 0, .duration1 = 150,
+            {.duration0 = 150, .level0 = 1,    
+            .duration1 = 150, .level1 = 0, }
         },
         {
-            .level0 = 0, .duration0 = 350,   
-            .level1 = 0, .duration1 = 350,
+            {.duration0 = 350, .level0 = 0,    
+            .duration1 = 350, .level1 = 0, }
         },
         {
-            .level0 = 1, .duration0 = 150,   
-            .level1 = 0, .duration1 = 150,
+            {.duration0 = 150, .level0 = 1,    
+            .duration1 = 150, .level1 = 0, }
         },
     };
 
     rmt_channel_handle_t ch1_phaseB_rmt_chan = NULL;
     rmt_tx_channel_config_t ch1_phaseB_rmt_chan_config = {
-                                                        .clk_src = RMT_CLK_SRC_DEFAULT,   // select source clock
                                                         .gpio_num = CH1_SW_OUTB_PIN,                    // GPIO number
+                                                        .clk_src = RMT_CLK_SRC_DEFAULT,   // select source clock
+                                                        .resolution_hz = 1000000,             // 1 MHz tick resolution, i.e., 1 tick = 1 µs
                                                         .mem_block_symbols = 64,          // memory block size, 64 * 4 = 256 Bytes
-                                                        .resolution_hz = 1e6,             // 1 MHz tick resolution, i.e., 1 tick = 1 µs
                                                         .trans_queue_depth = 4,           // set the number of transactions that can pend in the background
-                                                        .flags.invert_out = false,        // do not invert output signal
-                                                        .flags.with_dma = false,          // do not need DMA backend
+                                                        .flags = {
+                                                            .invert_out = false,        // do not invert output signal
+                                                            .with_dma = false,          // do not need DMA backend
+                                                            .io_loop_back = 0,
+                                                            .io_od_mode = 0,
+                                                            .allow_pd = 0,
+                                                            }
                                                         };
+
     ESP_ERROR_CHECK(rmt_new_tx_channel(&ch1_phaseB_rmt_chan_config, &ch1_phaseB_rmt_chan));
 
     rmt_copy_encoder_config_t ch1_phb_copy_encoder_cfg = {};
@@ -416,24 +456,28 @@ void run_rmt_Task(void* pvParameters)
 
     rmt_symbol_word_t channel1_phb_symbols[] = {
         {
-            .level0 = 0, .duration0 = 150,   
-            .level1 = 1, .duration1 = 150,
+            {.duration0 = 1, .level0 = 0,  
+            .duration1 = 2, .level1 = 0, }
         },
         {
-            .level0 = 0, .duration0 = 350,   
-            .level1 = 0, .duration1 = 350,
+            {.duration0 = 150, .level0 = 1,    
+            .duration1 = 150, .level1 = 0, }
         },
         {
-            .level0 = 0, .duration0 = 150,   
-            .level1 = 1, .duration1 = 150,
+            {.duration0 = 350, .level0 = 0,    
+            .duration1 = 350, .level1 = 0,} 
         },
         {
-            .level0 = 0, .duration0 = 350,   
-            .level1 = 0, .duration1 = 350,
+            {.duration0 = 150, .level0 = 1,    
+            .duration1 = 150, .level1 = 0, }
         },
         {
-            .level0 = 0, .duration0 = 150,   
-            .level1 = 1, .duration1 = 150,
+            {.duration0 = 350, .level0 = 0,    
+            .duration1 = 350, .level1 = 0, }
+        },
+        {
+            {.duration0 = 150, .level0 = 1,    
+            .duration1 = 150, .level1 = 0,} 
         },
     };
 
@@ -448,11 +492,11 @@ void run_rmt_Task(void* pvParameters)
 
 
     size_t sizeof_rmt_preload_struct = stp__rmt_get_size_of_rmt_preload_struct();
-    stp__rmt_preload_struct *rmt_preload_struct_ch1_pha_ptr = malloc(sizeof_rmt_preload_struct);
+    stp__rmt_preload_struct *rmt_preload_struct_ch1_pha_ptr = (stp__rmt_preload_struct*)(malloc(sizeof_rmt_preload_struct));
     if(rmt_preload_struct_ch1_pha_ptr == NULL) ESP_LOGE(TAG, "Error allocating memory for RMT preload struct ch1 phA!");
     memset(rmt_preload_struct_ch1_pha_ptr, 0, sizeof_rmt_preload_struct);
 
-    stp__rmt_preload_struct *rmt_preload_struct_ch1_phb_ptr = malloc(sizeof_rmt_preload_struct);
+    stp__rmt_preload_struct *rmt_preload_struct_ch1_phb_ptr = (stp__rmt_preload_struct*)(malloc(sizeof_rmt_preload_struct));
     if(rmt_preload_struct_ch1_phb_ptr == NULL) ESP_LOGE(TAG, "Error allocating memory for RMT preload struct ch1 phB!");
     memset(rmt_preload_struct_ch1_phb_ptr, 0, sizeof_rmt_preload_struct);
 
@@ -484,9 +528,9 @@ void run_rmt_Task(void* pvParameters)
 }
 
 
-void app_main(void)
+extern "C" void app_main(void)
 {
-    char* TAG = "main";
+    const char* TAG = "main";
 
     printf("\33[?25l"); //Hide terminal cursor, quoted from https://stackoverflow.com/questions/30126490/how-to-hide-console-cursor-in-c;
 
@@ -494,14 +538,14 @@ void app_main(void)
     // gpio_set_level(CH1_SW_OUTB_PIN, 1);
     // gpio_set_direction(CH1_SW_OUTA_PIN, GPIO_MODE_OUTPUT);
     // gpio_set_level(CH1_SW_OUTA_PIN, 0);
-
+    char sd_mount_point[8] = "/sdcard";
     stp_sd__spi_config spi_config = {
         .open        = false,
-        .mosi_di_pin = PIN_NUM_MOSI,
         .miso_do_pin = PIN_NUM_MISO,
+        .mosi_di_pin = PIN_NUM_MOSI,
         .clk_pin     = PIN_NUM_CLK,
         .cs_pin      = PIN_NUM_CS,
-        .mount_point = "/sdcard",
+        .mount_point = sd_mount_point,
         .card_ptr    = NULL,
     };
 
@@ -518,7 +562,7 @@ void app_main(void)
 
     BaseType_t flash_light_task_created;
     TaskHandle_t flash_light_task = NULL;
-    int flash_light_task_priority = BACKGROUND_TASK_PRIORTIY;
+    UBaseType_t flash_light_task_priority = BACKGROUND_TASK_PRIORTIY;
     flash_light_task_created = xTaskCreate(flash_lights, "Flash Lights", 1024, (void*) 0, flash_light_task_priority, &flash_light_task);
     if(flash_light_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating flashing light task!");
@@ -534,7 +578,7 @@ void app_main(void)
 
     BaseType_t adc_task_created;
     TaskHandle_t update_adc_task = NULL;
-    int adc_task_priority = BACKGROUND_TASK_PRIORTIY;
+    UBaseType_t adc_task_priority = BACKGROUND_TASK_PRIORTIY;
     adc_task_created = xTaskCreate(update_adc, "Update ADC Values", 4096, &adc_update_struct, adc_task_priority, &update_adc_task);
     if(adc_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating adc update task!");
@@ -543,7 +587,7 @@ void app_main(void)
 
     BaseType_t print_task_created;
     TaskHandle_t update_print_task = NULL;
-    int print_task_priority = BACKGROUND_TASK_PRIORTIY;
+    UBaseType_t print_task_priority = BACKGROUND_TASK_PRIORTIY;
     print_task_created = xTaskCreate(print_to_terminal, "Print to Terminal", 4096, &adc_update_struct, print_task_priority, &update_print_task);
     if(print_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating print to terminal update task!");
@@ -564,8 +608,8 @@ void app_main(void)
     if(reload_audio_buff_Queue == NULL) ESP_LOGE(TAG, "Error creating audio reload queue!");
 
     stp_sd__reload_memory_Task_struct reload_mem_Task_struct = {
-        .reload_audio_buff_Queue = reload_audio_buff_Queue,
         .wave_file_ptr = &wave_file,
+        .reload_audio_buff_Queue = reload_audio_buff_Queue,
     };
 
     BaseType_t reload_audio_memory_buff_task_created;
@@ -587,10 +631,10 @@ void app_main(void)
         .pre_dither_num_samples     = PRE_DITHER_MS/1000*96000,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
         .post_dither_num_samples    = 384,
         .chunk_buf_size_bytes       = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*2, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
+        .audio_sample_rate          = SAMPLE_RATE,
         .wavFile_ptr                = &wave_file,
         .reload_audio_buff_Queue    = reload_audio_buff_Queue,
         .reload_memory_struct_ptr   = &reload_memory_struct,
-        .audio_sample_rate          = SAMPLE_RATE,
     };
 
     stp_sd__audio_chunk audio_chunk = {};
@@ -622,7 +666,7 @@ void app_main(void)
 
     BaseType_t run_rmt_task_created;
     TaskHandle_t run_rmt_task_hndl = NULL;
-    int run_rmt_task_priority = RMT_TASK_PRIORITY;
+    UBaseType_t run_rmt_task_priority = RMT_TASK_PRIORITY;
     run_rmt_task_created = xTaskCreatePinnedToCore(run_rmt_Task, "Run RMT Task", 4096, &rmt_start_queue, run_rmt_task_priority, &run_rmt_task_hndl, RMT_TASK_CORE);
     if(run_rmt_task_created != pdPASS)
     {
@@ -642,7 +686,8 @@ void app_main(void)
     
     BaseType_t play_audio_task_created;
     TaskHandle_t play_audio_task_hndl = NULL;
-    int play_audio_task_priority = AUDIO_TASK_PRIORITY;
+    UBaseType_t
+     play_audio_task_priority = AUDIO_TASK_PRIORITY;
     play_audio_task_created = xTaskCreatePinnedToCore(play_audio_Task, "Play Audio Task", 4096, &play_audio_task_struct, play_audio_task_priority, &play_audio_task_hndl, AUDIO_TASK_CORE);
     if(play_audio_task_created != pdPASS)
     {
@@ -652,10 +697,10 @@ void app_main(void)
 
     
     
-    for(int i=0; i<20; i++)
+    for(int i=0; i<500; i++)
     { 
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     esp_err_t stp_audio__i2s_channel_disable(stp_audio__i2s_config* i2s_config_ptr);
