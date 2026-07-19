@@ -182,7 +182,7 @@ esp_err_t stp_audio__play_audio_chunk(stp_audio__i2s_config* i2s_config_ptr, stp
                 if(time_to_reload == true)
                 {
                     uint32_t load_result;
-                    if(xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &load_result, 10) != pdFALSE)      //Wait for reload memory task to finish loading SD card data onto buffer
+                    if(xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &load_result, portMAX_DELAY) != pdFALSE)      //Wait for reload memory task to finish loading SD card data onto buffer
                     {
                         memcpy(audio_chunk_ptr->chunk_data_ptr, reload_memory_struct_ptr->chunk_load_ptr, reload_memory_struct_ptr->chunk_load_ptr_cap);
                         audio_chunk_ptr->memory_buffer_pos = 0;
@@ -275,7 +275,7 @@ esp_err_t stp_audio__preload_buffer(stp_audio__i2s_config* i2s_config_ptr, stp_s
     stp_sd__reload_memory_data_struct* reload_memory_struct_ptr = audio_chunk_ptr->reload_memory_struct_ptr;
 
     reload_memory_struct_ptr->B_idx                     = audio_chunk_ptr->B_idx;
-    reload_memory_struct_ptr->new_chunk_data_pos        = audio_chunk_ptr->chunk_data_pos + audio_chunk_ptr->capacity/sizeof(int32_t);
+    reload_memory_struct_ptr->new_chunk_data_pos        = audio_chunk_ptr->chunk_data_pos + audio_chunk_ptr->capacity/sizeof(int32_t) + audio_chunk_ptr->B_idx;
     reload_memory_struct_ptr->chunk_len_wo_dither       = audio_chunk_ptr->chunk_len_wo_dither;
     reload_memory_struct_ptr->chunk_load_ptr            = audio_chunk_ptr->chunk_load_ptr;
     reload_memory_struct_ptr->chunk_start_pos_filebytes = audio_chunk_ptr->chunk_start_pos_filebytes;

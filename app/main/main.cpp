@@ -1,7 +1,3 @@
-/* SD card_ptr and FAT filesystem example.
-   This example uses SPI peripheral to communicate with SD card_ptr.
-*/
-
 //This program is written by David Earley (2025) 
 //This program borrows heavily from this article and the Espressif examples throughout:
 //https://truelogic.org/wordpress/2015/09/04/parsing-a-wav-file-in-c/
@@ -28,6 +24,7 @@
 #include "driver/gptimer.h"
 #include <driver/ledc.h>
 
+#include <iostream>
 
 #include "stp_sd_sdcardops.h"
 #include "stp_audio__audio_ops.h"
@@ -78,7 +75,7 @@
 #define CH1_CURSET_TIMER LEDC_TIMER_0
 #define CH1_CURSET_MODE LEDC_LOW_SPEED_MODE
 #define CH1_CURSET_DUTY_RES LEDC_TIMER_8_BIT 
-#define CH1_CURSET_FREQUENCY 200000             // 1 kHz PWM frequency
+#define CH1_CURSET_FREQUENCY 10000             // 1 kHz PWM frequency
 
 #define CH2_CURSET_PIN  GPIO_NUM_47
 
@@ -111,16 +108,31 @@
 #define ADC_UPDATE_PERIOD_MS    100
 #define PRINT_UPDATE_PERIOD_MS  100
 #define BACKGROUND_TASK_PRIORTIY 1
-#define AUDIO_TASK_PRIORITY      5
-#define RMT_TASK_PRIORITY        7
+#define AUDIO_TASK_PRIORITY      7
+#define RMT_TASK_PRIORITY        5
 
 #define RMT_TASK_CORE            1
 #define AUDIO_TASK_CORE          0
 
+
+enum ProgramStates {
+    END,
+    AUDIO_VOL_TEST,
+    AUDIO_ONLY,
+    BIMODAL,
+    SETUP
+};
+
 typedef struct {
     SemaphoreHandle_t         adc_mutex;
     stp_adc__adc_chan_results adc_results;
+    QueueHandle_t             program_state_queue;
 } Adc_Update_Struct;
+
+typedef struct RMT_Task_Struct {
+        QueueHandle_t rmt_start_queue;
+        QueueHandle_t program_state_queue;
+} RMT_Task_Struct;
 
 typedef struct {
     stp_audio__i2s_config* i2s_config_ptr;
@@ -129,6 +141,7 @@ typedef struct {
     Adc_Update_Struct* adc_update_struct_ptr;
     TaskHandle_t rmt_task_to_notify;
     QueueHandle_t rmt_start_queue;
+    QueueHandle_t program_state_queue;
     bool (*rmt_callback_func_ptr)(struct gptimer_t *, const gptimer_alarm_event_data_t *, void *);
 } Audio_Task_Setup_Struct;
 
@@ -144,7 +157,6 @@ void flash_lights(void * pvParameters){
 
     gpio_set_direction(LED2_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(LED1_PIN, 0);
-
 
     while(true){
         gpio_set_level(LED1_PIN, 1);
@@ -266,12 +278,12 @@ void play_audio_Task(void* pvParameters)
     stp_sd__wavFile* wave_file_ptr              = task_setup_struct_ptr->wave_file_ptr;
     Adc_Update_Struct* adc_update_struct_ptr    = task_setup_struct_ptr->adc_update_struct_ptr;
 
-    gptimer_handle_t audio_gptimer_hndl = NULL;
+    gptimer_handle_t audio_gptimer_hndl = NULL; 
     gptimer_config_t timer_config = {
                                     .clk_src = GPTIMER_CLK_SRC_DEFAULT,
                                     .direction = GPTIMER_COUNT_UP,
                                     .resolution_hz = 1000000, // 1MHz, 1 tick = 1us
-                                    .intr_priority = 0,        //TODO check and increase this later,
+                                    .intr_priority = 3,        //TODO check and increase this later,
                                     .flags = {
                                         .intr_shared = 1,
                                         .allow_pd = 0,
@@ -301,7 +313,7 @@ void play_audio_Task(void* pvParameters)
         .clk_src = (gptimer_clock_source_t)GPTIMER_CLK_SRC_DEFAULT, // Select the default clock source
         .direction = (gptimer_count_direction_t)GPTIMER_COUNT_UP,      // Counting direction is up
         .resolution_hz = 100000,   // Resolution is 1 MHz, i.e., 1 tick equals 1 microsecond
-        .intr_priority = 0,         //TODO: change this later
+        .intr_priority = 3,         //TODO: change this later
         .flags = {
             .intr_shared = 1,
             .allow_pd = 0,
@@ -382,6 +394,7 @@ static bool IRAM_ATTR start_RMT_output_gptimer_cb(gptimer_handle_t timer, const 
 void run_rmt_Task(void* pvParameters)
 {
     const char* TAG = "run_rmt_Task";
+    RMT_Task_Struct* rmt_task_struct_ptr = (RMT_Task_Struct*)pvParameters;
     
     rmt_channel_handle_t ch1_phaseA_rmt_chan = NULL;
     rmt_tx_channel_config_t ch1_phaseA_rmt_chan_config = {
@@ -499,6 +512,8 @@ void run_rmt_Task(void* pvParameters)
     stp__rmt_preload_struct *rmt_preload_struct_ch1_phb_ptr = (stp__rmt_preload_struct*)(malloc(sizeof_rmt_preload_struct));
     if(rmt_preload_struct_ch1_phb_ptr == NULL) ESP_LOGE(TAG, "Error allocating memory for RMT preload struct ch1 phB!");
     memset(rmt_preload_struct_ch1_phb_ptr, 0, sizeof_rmt_preload_struct);
+    int8_t program_state;
+
 
     while(true)
     {
@@ -522,8 +537,13 @@ void run_rmt_Task(void* pvParameters)
             ESP_LOGE(TAG, "RMT do transaction didn't work!");
             ESP_ERROR_CHECK(rmt_disable(ch1_phaseA_rmt_chan));
             ESP_ERROR_CHECK(rmt_disable(ch1_phaseB_rmt_chan));
-
         }
+        // if(xQueuePeek(rmt_task_struct_ptr->program_state_queue, &program_state, pdMS_TO_TICKS(25))==ESP_OK){
+        //     if (program_state != BIMODAL)
+        //     {
+        //         vTaskDelete(NULL);
+        //     }
+        // }
     }
 }
 
@@ -531,13 +551,15 @@ void run_rmt_Task(void* pvParameters)
 extern "C" void app_main(void)
 {
     const char* TAG = "main";
-
+    
     printf("\33[?25l"); //Hide terminal cursor, quoted from https://stackoverflow.com/questions/30126490/how-to-hide-console-cursor-in-c;
 
-    // gpio_set_direction(CH1_SW_OUTB_PIN, GPIO_MODE_OUTPUT);
-    // gpio_set_level(CH1_SW_OUTB_PIN, 1);
-    // gpio_set_direction(CH1_SW_OUTA_PIN, GPIO_MODE_OUTPUT);
-    // gpio_set_level(CH1_SW_OUTA_PIN, 0);
+    QueueHandle_t program_state_queue;
+    program_state_queue = xQueueCreate(2, sizeof(int));
+    if(program_state_queue == NULL) ESP_LOGE(TAG, "Error creating audio play queue!");
+    int program_state = SETUP;
+    esp_err_t ret = xQueueSend(program_state_queue, &program_state, pdMS_TO_TICKS(25));
+
     char sd_mount_point[8] = "/sdcard";
     stp_sd__spi_config spi_config = {
         .open        = false,
@@ -563,7 +585,7 @@ extern "C" void app_main(void)
     BaseType_t flash_light_task_created;
     TaskHandle_t flash_light_task = NULL;
     UBaseType_t flash_light_task_priority = BACKGROUND_TASK_PRIORTIY;
-    flash_light_task_created = xTaskCreate(flash_lights, "Flash Lights", 1024, (void*) 0, flash_light_task_priority, &flash_light_task);
+    flash_light_task_created = xTaskCreate(flash_lights, "Flash Lights", 1024, &program_state_queue, flash_light_task_priority, &flash_light_task);
     if(flash_light_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating flashing light task!");
         return;
@@ -575,7 +597,7 @@ extern "C" void app_main(void)
 
     Adc_Update_Struct adc_update_struct = {0};
     adc_update_struct.adc_mutex = adc_mutex;
-
+    adc_update_struct.program_state_queue = program_state_queue;
     BaseType_t adc_task_created;
     TaskHandle_t update_adc_task = NULL;
     UBaseType_t adc_task_priority = BACKGROUND_TASK_PRIORTIY;
@@ -591,6 +613,24 @@ extern "C" void app_main(void)
     print_task_created = xTaskCreate(print_to_terminal, "Print to Terminal", 4096, &adc_update_struct, print_task_priority, &update_print_task);
     if(print_task_created != pdPASS){
         ESP_LOGE(TAG, "Error creating print to terminal update task!");
+        return;
+    }
+
+    QueueHandle_t rmt_start_queue;
+    rmt_start_queue = xQueueCreate(1, sizeof(int8_t));
+    if(rmt_start_queue == NULL) ESP_LOGE(TAG, "Error creating audio play queue!");
+
+    RMT_Task_Struct rmt_task_struct = {
+        .rmt_start_queue = rmt_start_queue,
+        .program_state_queue = program_state_queue,
+    };
+    BaseType_t run_rmt_task_created;
+    TaskHandle_t run_rmt_task_hndl = NULL;
+    UBaseType_t run_rmt_task_priority = RMT_TASK_PRIORITY;
+    run_rmt_task_created = xTaskCreatePinnedToCore(run_rmt_Task, "Run RMT Task", 4096, &rmt_task_struct, run_rmt_task_priority, &run_rmt_task_hndl, RMT_TASK_CORE);
+    if(run_rmt_task_created != pdPASS)
+    {
+        ESP_LOGE(TAG, "Error creating run RMT task!");
         return;
     }
 
@@ -610,6 +650,7 @@ extern "C" void app_main(void)
     stp_sd__reload_memory_Task_struct reload_mem_Task_struct = {
         .wave_file_ptr = &wave_file,
         .reload_audio_buff_Queue = reload_audio_buff_Queue,
+        .program_state_queue = program_state_queue,
     };
 
     BaseType_t reload_audio_memory_buff_task_created;
@@ -625,11 +666,11 @@ extern "C" void app_main(void)
     stp_sd__reload_memory_data_struct reload_memory_struct = {};    //This is the data passed from the play_audio_chunk function to the reload_memory task
                                                                     //It's defined here to be in both tasks scope.
     stp_sd__audio_chunk_setup audio_chunk_setup = {
-        .chunk_len_wo_dither        = 9600,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
-        .rise_fall_num_samples      = 0,       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+        .chunk_len_wo_dither        = 19400,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .rise_fall_num_samples      = 1940,       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
         .padding_num_samples        = 100,     //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
-        .pre_dither_num_samples     = PRE_DITHER_MS/1000*96000,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
-        .post_dither_num_samples    = 384,
+        .pre_dither_num_samples     = 600,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+        .post_dither_num_samples    = 600,
         .chunk_buf_size_bytes       = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*2, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
         .audio_sample_rate          = SAMPLE_RATE,
         .wavFile_ptr                = &wave_file,
@@ -660,20 +701,6 @@ extern "C" void app_main(void)
                                         };
     ESP_ERROR_CHECK(stp_audio__i2s_channel_setup(&i2s_config));
 
-    QueueHandle_t rmt_start_queue;
-    rmt_start_queue = xQueueCreate(1, sizeof(int8_t));
-    if(rmt_start_queue == NULL) ESP_LOGE(TAG, "Error creating audio play queue!");
-
-    BaseType_t run_rmt_task_created;
-    TaskHandle_t run_rmt_task_hndl = NULL;
-    UBaseType_t run_rmt_task_priority = RMT_TASK_PRIORITY;
-    run_rmt_task_created = xTaskCreatePinnedToCore(run_rmt_Task, "Run RMT Task", 4096, &rmt_start_queue, run_rmt_task_priority, &run_rmt_task_hndl, RMT_TASK_CORE);
-    if(run_rmt_task_created != pdPASS)
-    {
-        ESP_LOGE(TAG, "Error creating run RMT task!");
-        return;
-    }
-
     Audio_Task_Setup_Struct play_audio_task_struct = {
         .i2s_config_ptr  = &i2s_config,
         .audio_chunk_ptr = &audio_chunk,
@@ -681,13 +708,13 @@ extern "C" void app_main(void)
         .adc_update_struct_ptr = &adc_update_struct,
         .rmt_task_to_notify = run_rmt_task_hndl,
         .rmt_start_queue = rmt_start_queue,
+        .program_state_queue = program_state_queue,
         .rmt_callback_func_ptr = start_RMT_output_gptimer_cb,
     };
     
     BaseType_t play_audio_task_created;
     TaskHandle_t play_audio_task_hndl = NULL;
-    UBaseType_t
-     play_audio_task_priority = AUDIO_TASK_PRIORITY;
+    UBaseType_t play_audio_task_priority = AUDIO_TASK_PRIORITY;
     play_audio_task_created = xTaskCreatePinnedToCore(play_audio_Task, "Play Audio Task", 4096, &play_audio_task_struct, play_audio_task_priority, &play_audio_task_hndl, AUDIO_TASK_CORE);
     if(play_audio_task_created != pdPASS)
     {
@@ -695,33 +722,42 @@ extern "C" void app_main(void)
         return;
     }
 
-    
-    
-    for(int i=0; i<500; i++)
-    { 
 
+    for(int i=0; i<1000; i++)
+    { 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    esp_err_t stp_audio__i2s_channel_disable(stp_audio__i2s_config* i2s_config_ptr);
+    program_state = END;
+    int8_t queue_receive_num = 0; //placeholder for dummy item received from queue.
+    ret = xQueueReceive(program_state_queue, &queue_receive_num, portMAX_DELAY);
+    if (ret == pdTRUE)
+    {
+        ret = xQueueSend(program_state_queue, &program_state, pdMS_TO_TICKS(25));  
+    }
 
+    stp_audio__i2s_channel_disable(&i2s_config);
+    
     if(stp_sd__free_audio_chunk(&audio_chunk) != ESP_OK){
         ESP_LOGE(TAG, "Error destructing audio chunk!");
         return;
     }
+
     if(stp_sd__close_audio_file(&wave_file) != ESP_OK){
         ESP_LOGE(TAG, "Error closing audio file!");
         return;
     }
+    printf("Here3\n");
+
     if(stp_sd__unmount_sd_card(&spi_config) != ESP_OK){
         ESP_LOGE(TAG, "Error unmounting SD card");
         return;
     }
+    printf("Here4\n");
 
-        for(int i=0; i<800; i++)
-    { 
-
-        vTaskDelay(pdMS_TO_TICKS(500));
+    for(int i=0; i<500; i++)
+    {
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     return;

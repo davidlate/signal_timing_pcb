@@ -97,24 +97,28 @@ esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     // All done, unmount partition and disable SPI peripheral
     char* TAG = "unmount SD";
     chdir("/");
-
+    printf("Here inside 1\n");
     //deinitialize the bus after all devices are removed
-    if(spi_bus_free((spi_config_ptr->host).slot) != ESP_OK){
-        ESP_LOGE(TAG, "Error freeing SPI bus");
-        return ESP_FAIL;
+    esp_err_t ret = spi_bus_free((spi_config_ptr->host).slot);
+    printf("Here inside 2\n");
+
+    if (ret != ESP_OK){
+        ESP_LOGE(TAG, "\nError freeing SPI bus: %.50s", esp_err_to_name(ret));
+        // return ESP_FAIL;
     }
     else{
+        printf("This guy\n");
         spi_config_ptr->open = false;
         memset(spi_config_ptr, 0, sizeof(*spi_config_ptr)); //Reset all members of wave file to 0;
     }
+    printf("spi bus freed\n");
 
-    esp_err_t ret = esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr);
+    ret = esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr);
     if(ret !=ESP_OK){
-        ESP_LOGE(TAG, "Error unmounting SD Card! Error: %.50s", esp_err_to_name(ret));
-        return ESP_FAIL;
+        ESP_LOGE(TAG, "\nError unmounting SD Card! Error: %.50s", esp_err_to_name(ret));
+        // return ESP_FAIL;
     }
-
-
+    printf("sd card unmounted\n");
 
     return ESP_OK;
 }
@@ -123,7 +127,9 @@ esp_err_t stp_sd__open_audio_file(stp_sd__wavFile* wave_file_ptr)
 {
     char* TAG = "open audio file";
     //Open file for reading
-    wave_file_ptr->fp = fopen(strcat("/sdcard", wave_file_ptr->filename), "rb");
+    char path[200] = "/sdcard";
+    if (strlen(wave_file_ptr->filename)>170) return ESP_FAIL;
+    wave_file_ptr->fp = fopen(strcat(path, wave_file_ptr->filename), "rb");
     printf("here\n");
 
     if(wave_file_ptr->fp==NULL){
@@ -349,8 +355,8 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
             assert(audio_chunk_ptr->cos_ramp_LUT_ptr);
             for(int i=0; i<audio_chunk_ptr->rise_fall_num_samples; i++)
             {
-                double rise_frac    = 1.0F - ((float)i / (float)(audio_chunk_ptr->rise_fall_num_samples));
-                double cos_ramp     = (1.0F + cos(rise_frac * M_PI))/2;
+                double rise_frac    = 1.0 - ((double)i / (double)(audio_chunk_ptr->rise_fall_num_samples));
+                double cos_ramp     = (1.0 + cos(rise_frac * M_PI))/2;
                 audio_chunk_ptr->cos_ramp_LUT_ptr[i] = cos_ramp;
             }
         }
@@ -522,7 +528,7 @@ void stp_sd__threadsafe_reload_chunk_memory_buffer_Task(void* pvParameters){
             size_t num_samples_to_read;
             int num_non_dither_samples_remaining_in_chunk;
 
-            num_non_dither_samples_remaining_in_chunk = reload_struct.chunk_len_wo_dither - reload_struct.new_chunk_data_pos - reload_struct.B_idx;
+            num_non_dither_samples_remaining_in_chunk = reload_struct.chunk_len_wo_dither - (reload_struct.new_chunk_data_pos - reload_struct.B_idx);
 
             if(num_non_dither_samples_remaining_in_chunk > 0)   //If this is less than 0, it means we already have enough samples loaded to finish the transmission
             {
@@ -551,7 +557,7 @@ esp_err_t stp_sd__free_audio_chunk(stp_sd__audio_chunk* audio_chunk_ptr){
     if (audio_chunk_ptr->capacity != 0){
         free(audio_chunk_ptr->chunk_data_ptr);
         free(audio_chunk_ptr->chunk_load_ptr);
-        memset(audio_chunk_ptr, 0, sizeof(audio_chunk_ptr));
+        memset(audio_chunk_ptr, 0, sizeof(*audio_chunk_ptr));
         return ESP_OK;
     }
     else{

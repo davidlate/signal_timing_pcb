@@ -70,6 +70,7 @@ typedef struct {        //This is used to pass the requisite data to the task th
 typedef struct {        //This is used to pass the requisite data to the task that reloads the memory buffer while the audio task runs.
     stp_sd__wavFile*    wave_file_ptr;
     QueueHandle_t       reload_audio_buff_Queue;
+    QueueHandle_t       program_state_queue;
 } stp_sd__reload_memory_Task_struct;
 
 typedef struct {
