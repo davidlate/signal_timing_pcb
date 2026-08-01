@@ -19,7 +19,8 @@ esp_err_t stp_audio__i2s_channel_setup(stp_audio__i2s_config* i2s_config_ptr)
         return ESP_FAIL;
     }
     //TODO check out 4
-    size_t write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * 2;
+    //Added a factor of (sizeof(int32_t)) recently suggested by AI.  Keep an eye on it if anything weird pops up.
+    size_t write_buffer_size_bytes = i2s_config_ptr->num_dma_buf*i2s_config_ptr->size_dma_buf * 2 * sizeof(int32_t);
 
     i2s_config_ptr->buf_len = write_buffer_size_bytes / sizeof(int32_t);
 

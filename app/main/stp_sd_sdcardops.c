@@ -296,14 +296,27 @@ esp_err_t stp_sd__open_audio_file(stp_sd__wavFile* wave_file_ptr)
 */
 
 esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_ptr, stp_sd__audio_chunk* audio_chunk_ptr){
-    char* TAG = "audio_chunk_ptr_const";
+    char* TAG = "audio_chunk_ptr_const stp_sd_sdcardops.c";
+    
+    size_t sample_rate = audio_chunk_setup_ptr->audio_sample_rate;
+
+    size_t pre_dither_samples      = 2*sample_rate/1000*audio_chunk_setup_ptr->pre_dither_ms;
+    size_t rise_fall_samples       = 2*sample_rate/1000*audio_chunk_setup_ptr->rise_fall_ms;
+    size_t chunk_wo_dither_samples = 2*sample_rate/1000*audio_chunk_setup_ptr->chunk_len_wo_dither_ms;
+    size_t post_dither_samples     = 2*sample_rate/1000*audio_chunk_setup_ptr->post_dither_ms;
+    size_t padding_samples         = 2*sample_rate/1000*audio_chunk_setup_ptr->padding_ms;
+
+    if(2*rise_fall_samples > chunk_wo_dither_samples){
+        ESP_LOGE(TAG, "Rise + fall samples are longer than entire chunk!");
+        return ESP_FAIL;
+    }
 
     size_t A_idx = 0;
-    size_t B_idx = A_idx + audio_chunk_setup_ptr->pre_dither_num_samples;
-    size_t C_idx = B_idx + audio_chunk_setup_ptr->rise_fall_num_samples;
-    size_t D_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither - audio_chunk_setup_ptr->rise_fall_num_samples;
-    size_t E_idx = B_idx + audio_chunk_setup_ptr->chunk_len_wo_dither;
-    size_t F_idx = E_idx + audio_chunk_setup_ptr->post_dither_num_samples;
+    size_t B_idx = A_idx + pre_dither_samples;
+    size_t C_idx = B_idx + rise_fall_samples;
+    size_t D_idx = B_idx + chunk_wo_dither_samples - rise_fall_samples;
+    size_t E_idx = B_idx + chunk_wo_dither_samples;
+    size_t F_idx = E_idx + post_dither_samples;
     
     stp_sd__wavFile* wave_file_ptr = audio_chunk_setup_ptr->wavFile_ptr;
     // printf("A_idx: %i | B_idx: %i | C_idx: %i | D_idx: %i | E_idx: %i | F_idx: %i", A_idx, B_idx, C_idx, D_idx, E_idx, F_idx);
@@ -331,12 +344,12 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
         ESP_LOGE(TAG, "Audio chunk is longer than available audio data!  Increase file length, or decrease chunk length or chunk padding.");
         return ESP_FAIL;
     }
-
-    audio_chunk_ptr->chunk_len_wo_dither     = audio_chunk_setup_ptr->chunk_len_wo_dither;
-    audio_chunk_ptr->rise_fall_num_samples   = audio_chunk_setup_ptr->rise_fall_num_samples;
-    audio_chunk_ptr->padding_num_samples     = audio_chunk_setup_ptr->padding_num_samples;
-    audio_chunk_ptr->pre_dither_num_samples  = audio_chunk_setup_ptr->pre_dither_num_samples;
-    audio_chunk_ptr->post_dither_num_samples = audio_chunk_setup_ptr->post_dither_num_samples; 
+    //TODO this needs some more attention.  Rise/Fall num samples was converted to rise_ms and fall_ms. So far the conversion only considers the rise num samples
+    audio_chunk_ptr->chunk_len_wo_dither     = chunk_wo_dither_samples;
+    audio_chunk_ptr->rise_fall_num_samples   = rise_fall_samples;
+    audio_chunk_ptr->padding_num_samples     = padding_samples;
+    audio_chunk_ptr->pre_dither_num_samples  = pre_dither_samples;
+    audio_chunk_ptr->post_dither_num_samples = post_dither_samples;
     audio_chunk_ptr->start_file_pos_samples  = start_file_pos_samples;
     audio_chunk_ptr->end_file_pos_samples    = end_file_pos_samples;
     audio_chunk_ptr->delta_file_pos_samples  = delta_file_pos_samples;
@@ -347,11 +360,11 @@ esp_err_t stp_sd__init_audio_chunk(stp_sd__audio_chunk_setup* audio_chunk_setup_
     audio_chunk_ptr->chunk_load_ptr   = malloc(audio_chunk_ptr->capacity);
     assert(audio_chunk_ptr->chunk_load_ptr);
     int max_rise_fall_samples = 1e9;
-    if(audio_chunk_setup_ptr->rise_fall_num_samples <= max_rise_fall_samples)
+    if(rise_fall_samples <= max_rise_fall_samples)
     {
-        if (audio_chunk_setup_ptr->rise_fall_num_samples > 0)
+        if (rise_fall_samples > 0)
         {
-            audio_chunk_ptr->cos_ramp_LUT_ptr = malloc(audio_chunk_setup_ptr->rise_fall_num_samples*sizeof(int32_t));
+            audio_chunk_ptr->cos_ramp_LUT_ptr = malloc(rise_fall_samples*sizeof(int32_t));
             assert(audio_chunk_ptr->cos_ramp_LUT_ptr);
             for(int i=0; i<audio_chunk_ptr->rise_fall_num_samples; i++)
             {
@@ -464,7 +477,7 @@ esp_err_t stp_sd__get_next_audio_sample(stp_sd__audio_chunk* audio_chunk_ptr, in
     }
     else if (chunk_data_pos >= D_idx && chunk_data_pos<E_idx)
     {
-        int i_reverse = E_idx - chunk_data_pos;
+        int i_reverse = E_idx - chunk_data_pos - 1;
         next_sample_double  = (double)(audio_chunk_ptr->chunk_data_ptr[audio_chunk_ptr->memory_buffer_pos]) * (audio_chunk_ptr->cos_ramp_LUT_ptr[i_reverse]);
         *next_sample_ptr    = (int32_t)next_sample_double;
         audio_chunk_ptr->chunk_data_pos++;

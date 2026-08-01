@@ -100,10 +100,10 @@
 #define MIN_VOL_DBFS            -60
 
 #define AUDIO_PLAY_INTERVAL_MS              1000
-#define PCM5102A_LATENCY_COMPENSATION_US    4975                    
+#define PCM5102A_LATENCY_COMPENSATION_US    0                    
 #define PRE_DITHER_MS                       0
 
-#define RMT_PLAY_DELAY_MS                       10+PCM5102A_LATENCY_COMPENSATION_US/1000
+#define RMT_PLAY_DELAY_MS                   1+PCM5102A_LATENCY_COMPENSATION_US/1000
 
 #define ADC_UPDATE_PERIOD_MS    100
 #define PRINT_UPDATE_PERIOD_MS  100
@@ -175,8 +175,8 @@ void update_adc(void* pvParameters){
     stp_adc__adc_setup_struct adc_chan_setup = {
         .vol_adc_unit  = VOL_ADC_UNIT,
         .vol_adc_chan  = VOL_ADC_CHAN,
-        .ch1_adc_unit  = CH2_ADC_UNIT,  //TODO fix
-        .ch1_adc_chan  = CH2_ADC_CHAN,  //TODO fix
+        .ch1_adc_unit  = CH2_ADC_UNIT,  //TODO change this to channel 1.  It's kept at channel 2 to make testing easier
+        .ch1_adc_chan  = CH2_ADC_CHAN,  //TODO fix - same here
         .ch2_adc_unit  = CH2_ADC_UNIT,
         .ch2_adc_chan  = CH2_ADC_CHAN,
         .batt_adc_unit = BATT_ADC_UNIT,
@@ -665,12 +665,13 @@ extern "C" void app_main(void)
     
     stp_sd__reload_memory_data_struct reload_memory_struct = {};    //This is the data passed from the play_audio_chunk function to the reload_memory task
                                                                     //It's defined here to be in both tasks scope.
+
     stp_sd__audio_chunk_setup audio_chunk_setup = {
-        .chunk_len_wo_dither        = 19400,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
-        .rise_fall_num_samples      = 1940,       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
-        .padding_num_samples        = 100,     //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
-        .pre_dither_num_samples     = 600,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
-        .post_dither_num_samples    = 600,
+        .chunk_len_wo_dither_ms     = 100,    //REQUIRED INPUT: length of chunk in number of samples, not including dither
+        .rise_fall_ms               = 10,       //REQUIRED INPUT: Number of samples to apply rise/fall scaling to (nominally 96 [1ms @ 96000Hz]) at the beginning and end of the chunk
+        .padding_ms                 = 1,     //REQUIRED INPUT: Number of samples to offset from the beginning and end of the audio data
+        .pre_dither_ms              = 1,     //REQUIRED INPUT: Number of samples of dither to append to the beginning and end of the audio file (to appease the PCM5102a chip we are using)
+        .post_dither_ms             = 1,
         .chunk_buf_size_bytes       = NUM_DMA_BUFF*SIZE_DMA_BUFF*sizeof(int32_t)*2, //Factor of four is needed to match i2s buff size.  +1 is added to make the buffer bigger just in case
         .audio_sample_rate          = SAMPLE_RATE,
         .wavFile_ptr                = &wave_file,
