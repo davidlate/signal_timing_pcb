@@ -97,28 +97,25 @@ esp_err_t stp_sd__unmount_sd_card(stp_sd__spi_config* spi_config_ptr){
     // All done, unmount partition and disable SPI peripheral
     char* TAG = "unmount SD";
     chdir("/");
-    printf("Here inside 1\n");
+
+    esp_err_t ret = esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr);
+    if(ret !=ESP_OK){
+        ESP_LOGE(TAG, "\nError unmounting SD Card! Error: %.50s", esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "SD Card Unmounted");
     //deinitialize the bus after all devices are removed
-    esp_err_t ret = spi_bus_free((spi_config_ptr->host).slot);
-    printf("Here inside 2\n");
+    ret = spi_bus_free((spi_config_ptr->host).slot);
 
     if (ret != ESP_OK){
         ESP_LOGE(TAG, "\nError freeing SPI bus: %.50s", esp_err_to_name(ret));
-        // return ESP_FAIL;
     }
     else{
-        printf("This guy\n");
+        ESP_LOGI(TAG, "SPI Bus Freed");
         spi_config_ptr->open = false;
         memset(spi_config_ptr, 0, sizeof(*spi_config_ptr)); //Reset all members of wave file to 0;
     }
-    printf("spi bus freed\n");
 
-    ret = esp_vfs_fat_sdcard_unmount(spi_config_ptr->mount_point, spi_config_ptr->card_ptr);
-    if(ret !=ESP_OK){
-        ESP_LOGE(TAG, "\nError unmounting SD Card! Error: %.50s", esp_err_to_name(ret));
-        // return ESP_FAIL;
-    }
-    printf("sd card unmounted\n");
 
     return ESP_OK;
 }
