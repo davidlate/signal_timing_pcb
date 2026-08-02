@@ -1187,10 +1187,9 @@ esp_err_t rmt_tx_switch_gpio(rmt_channel_handle_t channel, gpio_num_t gpio_num, 
 
 /*REPLACE: REPLACEMENT CODE BELOW______________________________________________________________________________*/
 typedef struct stp__rmt_preload_struct {
-    rmt_tx_channel_t tx_chan;
     rmt_tx_trans_desc_t t;
-    rmt_channel_t channel;
-    rmt_hal_context_t hal;
+    rmt_channel_t *channel;
+    rmt_hal_context_t *hal;
     int channel_id;
 } stp__rmt_preload_struct;
 
@@ -1259,7 +1258,6 @@ esp_err_t stp__rmt_transmit_preload(rmt_channel_handle_t channel,
             atomic_store(&channel->fsm, RMT_FSM_ENABLE);
         }
     }
-    rmt_preload_struct_ptr->tx_chan = *tx_chan;
     rmt_preload_struct_ptr->t = *t;
 
     return ESP_OK;
@@ -1346,22 +1344,22 @@ void rmt_tx_preload_transaction(rmt_tx_channel_t *tx_chan, rmt_tx_trans_desc_t *
     // rmt_ll_tx_start(hal->regs, channel_id);
     // portEXIT_CRITICAL_SAFE(&channel->spinlock);
 
-    rmt_preload_struct_ptr->channel    = *channel;
-    rmt_preload_struct_ptr->hal        = *hal;
+    rmt_preload_struct_ptr->channel    = channel;
+    rmt_preload_struct_ptr->hal        = hal;
     rmt_preload_struct_ptr->channel_id = channel_id;
     rmt_preload_struct_ptr->t          = *t;
 }
 
 void stp__rmt_do_transaction(stp__rmt_preload_struct* rmt_preload_struct_ptr)
 {
-    rmt_channel_t channel = rmt_preload_struct_ptr->channel;
-    rmt_hal_context_t hal = rmt_preload_struct_ptr->hal;
-    rmt_tx_trans_desc_t t = rmt_preload_struct_ptr->t;
-    int channel_id        = rmt_preload_struct_ptr->channel_id;
-    portENTER_CRITICAL_ISR(&channel.spinlock);
-    rmt_ll_tx_fix_idle_level(hal.regs, channel_id, t.flags.eot_level, true);
-    rmt_ll_tx_start(hal.regs, channel_id);
-    portEXIT_CRITICAL_ISR(&channel.spinlock);
+    rmt_channel_t *channel = rmt_preload_struct_ptr->channel;
+    rmt_hal_context_t *hal = rmt_preload_struct_ptr->hal;
+    rmt_tx_trans_desc_t t  = rmt_preload_struct_ptr->t;
+    int channel_id         = rmt_preload_struct_ptr->channel_id;
+    portENTER_CRITICAL_ISR(&channel->spinlock);
+    rmt_ll_tx_fix_idle_level(hal->regs, channel_id, t.flags.eot_level, true);
+    rmt_ll_tx_start(hal->regs, channel_id);
+    portEXIT_CRITICAL_ISR(&channel->spinlock);
 }
 
 /*END REPLACE*/
